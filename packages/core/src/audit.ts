@@ -1,65 +1,89 @@
 import { open, readFile, mkdir, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
+import { z } from "zod";
 import { AuditIntegrityError } from "./errors.js";
 import { sha256, stableStringify } from "./hash.js";
 import { ulid } from "./ulid.js";
 
 /**
- * Audit event. Field names match the milestone schema. Optional fields are
- * omitted on the wire when they do not apply (no `scanner` until milestone 3,
- * no `approval` until milestone 4).
+ * Audit event. Optional fields are omitted on the wire until the milestone
+ * that writes them (scanner in milestone 3, approval in milestone 4).
  *
  * An allowed call is two records: an intent record written before the
  * upstream is contacted (no `resultHash` / `durationMs`), then an outcome
  * record written after. A denial is a single record and is not forwarded.
+ *
+ * `taint` is the session state before this event. The event that introduces
+ * taint still records the previous state; the next event records the update.
+ * See the README audit schema.
+ *
+ * A decision that resolves an `approve_pending` record sets
+ * `approval.pendingId` to that record's `id`. The pending record itself sets
+ * `expiresAt`. Approvals are once-only, so a retry is a new pending record.
  */
-export interface AuditEvent {
-  id: string;
-  ts: string;
-  sessionId: string;
-  client: { name?: string; version?: string };
-  upstream: string;
-  method: AuditMethod;
-  tool?: string;
-  argsRedacted: unknown;
-  argsHash: string;
-  decision: AuditDecision;
-  ruleId?: string;
-  reason?: string;
-  taint: AuditTaint;
-  scanner?: AuditScanner;
-  approval?: AuditApproval;
-  resultHash?: string;
-  durationMs?: number;
-  prevHash: string;
-  hash: string;
-}
+export const scannerHitTargetSchema = z.enum(["args", "result", "description"]);
+export const scannerVerdictSchema = z.enum(["clean", "flagged", "wrapped", "blocked"]);
 
-export type AuditMethod = "tools/call" | "tools/list" | "resources/read" | "prompts/get";
+export const auditScannerHitSchema = z.strictObject({
+  rule: z.string(),
+  span: z.tuple([z.number(), z.number()]),
+  target: scannerHitTargetSchema,
+  path: z.string(),
+});
 
-export type AuditDecision =
-  | "allow"
-  | "deny"
-  | "approve_pending"
-  | "approved"
-  | "denied_by_human"
-  | "timeout";
+export const auditScannerSchema = z.strictObject({
+  verdict: scannerVerdictSchema,
+  hits: z.array(auditScannerHitSchema),
+});
 
-export interface AuditTaint {
-  tainted: boolean;
-  sources: string[];
-}
+export const auditApprovalSchema = z.strictObject({
+  channel: z.enum(["elicitation", "dashboard", "cli"]).optional(),
+  by: z.string().optional(),
+  latencyMs: z.number().optional(),
+  /** `id` of the `approve_pending` event this decision resolves. */
+  pendingId: z.string().optional(),
+});
 
-export interface AuditScanner {
-  verdict: "clean" | "flagged" | "wrapped";
-  hits: { rule: string; span: [number, number] }[];
-}
+export const auditTaintSchema = z.strictObject({
+  tainted: z.boolean(),
+  sources: z.array(z.string()),
+});
 
-export interface AuditApproval {
-  channel: "elicitation" | "dashboard" | "cli";
-  by?: string;
-  latencyMs: number;
-}
+export const auditEventSchema = z.strictObject({
+  id: z.string(),
+  ts: z.string(),
+  sessionId: z.string(),
+  client: z.strictObject({
+    name: z.string().optional(),
+    version: z.string().optional(),
+  }),
+  upstream: z.string(),
+  method: z.enum(["tools/call", "tools/list", "resources/read", "prompts/get"]),
+  tool: z.string().optional(),
+  argsRedacted: z.unknown(),
+  argsHash: z.string(),
+  decision: z.enum(["allow", "deny", "approve_pending", "approved", "denied_by_human", "timeout"]),
+  ruleId: z.string().optional(),
+  reason: z.string().optional(),
+  taint: auditTaintSchema,
+  scanner: auditScannerSchema.optional(),
+  approval: auditApprovalSchema.optional(),
+  /** ISO 8601 UTC. Set on `approve_pending` records. */
+  expiresAt: z.string().optional(),
+  resultHash: z.string().optional(),
+  durationMs: z.number().optional(),
+  prevHash: z.string(),
+  hash: z.string(),
+});
+
+export type AuditEvent = z.infer<typeof auditEventSchema>;
+export type AuditMethod = AuditEvent["method"];
+export type AuditDecision = AuditEvent["decision"];
+export type AuditTaint = z.infer<typeof auditTaintSchema>;
+export type AuditScanner = z.infer<typeof auditScannerSchema>;
+export type AuditScannerHit = z.infer<typeof auditScannerHitSchema>;
+export type ScannerHitTarget = z.infer<typeof scannerHitTargetSchema>;
+export type AuditApproval = z.infer<typeof auditApprovalSchema>;
 
 /** Fields the gateway supplies. The log assigns id, ts, prevHash, and hash. */
 export type NewAuditEvent = Omit<AuditEvent, "id" | "ts" | "prevHash" | "hash">;
@@ -82,8 +106,15 @@ export interface AuditVerifyFailure {
 
 export type AuditVerifyResult = AuditVerifyOk | AuditVerifyFailure;
 
+/**
+ * sha256(prevHash + canonical JSON of the event with the hash field removed).
+ *
+ * The prefix is the raw prevHash hex with no separator. That same value is
+ * also a field inside the JSON, because only `hash` is stripped. The first
+ * event's prevHash is GENESIS_HASH. Canonical JSON is stableStringify.
+ */
 export function eventHash(event: Omit<AuditEvent, "hash">): string {
-  return sha256(stableStringify(event));
+  return sha256(event.prevHash + stableStringify(event));
 }
 
 export function verifyAuditJsonl(contents: string): AuditVerifyResult {
@@ -187,19 +218,5 @@ export class JsonlAuditLog implements AuditSink {
 }
 
 function isAuditEvent(value: unknown): value is AuditEvent {
-  if (value === null || typeof value !== "object") return false;
-  const event = value as Record<string, unknown>;
-  return (
-    typeof event.id === "string" &&
-    typeof event.ts === "string" &&
-    typeof event.sessionId === "string" &&
-    typeof event.upstream === "string" &&
-    typeof event.method === "string" &&
-    typeof event.argsHash === "string" &&
-    typeof event.decision === "string" &&
-    typeof event.prevHash === "string" &&
-    typeof event.hash === "string" &&
-    event.taint !== null &&
-    typeof event.taint === "object"
-  );
+  return auditEventSchema.safeParse(value).success;
 }

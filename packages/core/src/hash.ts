@@ -6,8 +6,10 @@ export function sha256(value: string): string {
 }
 
 /**
- * Deterministic JSON. Object keys are sorted. `undefined` object entries are
- * dropped; `undefined` array entries become null, matching `JSON.stringify`.
+ * Canonical JSON for audit hashes. No whitespace.
+ * Object keys are sorted by UTF-16 code unit (`Array#sort` on the keys).
+ * `undefined` object entries are dropped. `undefined` array entries become
+ * null. Strings, numbers, booleans, and null use `JSON.stringify`.
  */
 export function stableStringify(value: unknown): string {
   if (value === undefined) return "null";

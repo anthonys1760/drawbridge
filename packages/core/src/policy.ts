@@ -43,6 +43,10 @@ export interface PreCallDecision {
  * Runs after an upstream responds and before the result is returned.
  * Milestone 3's scanner and taint tracker plug in here. The returned `result`
  * is what the client sees. Throwing withholds the upstream payload.
+ *
+ * `taint`, when set, is the session state this result introduces. The audit
+ * record for this call still carries the previous taint. The next record is
+ * what stores the update. Milestone 1 does not keep that session state.
  */
 export interface PostResultInput {
   sessionId: string;

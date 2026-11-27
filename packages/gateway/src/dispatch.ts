@@ -82,7 +82,6 @@ export async function handleToolsList(
       throw new Error(failure);
     }
     let scanner = undefined;
-    let taint = UNTAINTED_SESSION;
     try {
       const post = await deps.policy.postResult({
         sessionId: deps.sessionId,
@@ -92,7 +91,6 @@ export async function handleToolsList(
         trusted: pool.trusted(upstream),
         client: input.client,
       });
-      if (post.taint) taint = post.taint;
       if (post.scanner) scanner = post.scanner;
     } catch (error) {
       const failure = `post-result hook failed for upstream "${upstream}": ${message(error)}`;
@@ -108,12 +106,11 @@ export async function handleToolsList(
     }
     await appendOrThrow(deps.audit, {
       ...base,
-      taint,
       ...(scanner ? { scanner } : {}),
       resultHash: sha256(stableStringify(listed.map((tool) => tool.name))),
       durationMs: Date.now() - started,
     });
-      tools.push(
+    tools.push(
       ...listed.map((tool) => ({
         name: namespaceTool(upstream, tool.name),
         ...(tool.description !== undefined ? { description: tool.description } : {}),
@@ -207,7 +204,6 @@ export async function handleToolCall(
   }
 
   let finalResult = result;
-  let taint = UNTAINTED_SESSION;
   let scanner = undefined;
   try {
     const post = await deps.policy.postResult({
@@ -220,16 +216,14 @@ export async function handleToolCall(
       client: input.client,
     });
     finalResult = asToolResult(post.result, result);
-    if (post.taint) taint = post.taint;
+    // post.taint would apply to the next event. This record keeps base.taint.
     if (post.scanner) scanner = post.scanner;
   } catch (error) {
     finalResult = textError(`post-result hook failed; result withheld (${message(error)})`);
-    taint = UNTAINTED_SESSION;
   }
 
   const outcome = await appendQuiet(deps.audit, {
     ...base,
-    taint,
     ...(scanner ? { scanner } : {}),
     resultHash: sha256(stableStringify(finalResult)),
     durationMs: Date.now() - started,

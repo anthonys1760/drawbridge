@@ -18,6 +18,10 @@ export {
 export {
   GENESIS_HASH,
   JsonlAuditLog,
+  auditApprovalSchema,
+  auditEventSchema,
+  auditScannerHitSchema,
+  auditScannerSchema,
   eventHash,
   verifyAuditJsonl,
   type AuditApproval,
@@ -25,10 +29,12 @@ export {
   type AuditEvent,
   type AuditMethod,
   type AuditScanner,
+  type AuditScannerHit,
   type AuditSink,
   type AuditTaint,
   type AuditVerifyResult,
   type NewAuditEvent,
+  type ScannerHitTarget,
 } from "./audit.js";
 export {
   interpolate,

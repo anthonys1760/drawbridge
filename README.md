@@ -88,11 +88,11 @@ For `tools/call` the order is:
 
 `tools/list` does the same per upstream and returns one page. A failed upstream list fails the whole list, so the catalog is never silently partial. `ping` is answered locally by the SDK. Resources, prompts, and completions are not aggregated.
 
-The gateway keeps a session id (a ULID) for the process. That is the stdio client's session. Taint is recorded as untainted until the scanner milestone.
+The gateway keeps a session id (a ULID) for the process. That is the stdio client's session. Milestone 1 writes an untainted session on every record. See the audit schema for when a later milestone updates that field.
 
-## Audit record
+## Audit schema
 
-Each line is one JSON object. The hash is SHA-256 of the canonical JSON of every field except `hash`. The first record's `prevHash` is 64 zeroes.
+The config file is `drawbridge.yaml`. Each log line is one JSON object, checked by `auditEventSchema` in `packages/core`. Fields that later milestones write (`scanner`, `approval`, `expiresAt`) are optional and are omitted until then.
 
 ```ts
 interface AuditEvent {
@@ -109,8 +109,22 @@ interface AuditEvent {
   ruleId?: string;
   reason?: string;
   taint: { tainted: boolean; sources: string[] };
-  scanner?: { verdict: "clean" | "flagged" | "wrapped"; hits: { rule: string; span: [number, number] }[] };
-  approval?: { channel: "elicitation" | "dashboard" | "cli"; by?: string; latencyMs: number };
+  scanner?: {
+    verdict: "clean" | "flagged" | "wrapped" | "blocked";
+    hits: {
+      rule: string;
+      span: [number, number];
+      target: "args" | "result" | "description";
+      path: string;           // field path inside that target
+    }[];
+  };
+  approval?: {
+    channel?: "elicitation" | "dashboard" | "cli";
+    by?: string;
+    latencyMs?: number;
+    pendingId?: string;       // id of the approve_pending event this decision resolves
+  };
+  expiresAt?: string;         // ISO 8601 UTC, set on approve_pending
   resultHash?: string;        // present on the outcome record
   durationMs?: number;
   prevHash: string;
@@ -118,9 +132,15 @@ interface AuditEvent {
 }
 ```
 
-An allowed call is two lines: intent, then outcome. A denial is one line. `argsRedacted` masks values whose keys look like secrets, plus email addresses, `Bearer` tokens, and `sk-` tokens in strings. `argsHash` covers the raw arguments, which are not stored. This is not the heuristic scanner.
+**Hash.** `hash = sha256(prevHash + canonicalJson)`, hex-encoded, with no separator between the prefix and the JSON. `canonicalJson` is the canonical JSON of the event with the `hash` field removed. `prevHash` is that raw prefix and is also still a field inside `canonicalJson`. The first event's `prevHash` is 64 zero characters (`"0".repeat(64)`). Each later event's `prevHash` is the previous event's `hash`.
 
-Opening an existing log that fails verification refuses to start.
+Canonical JSON (`stableStringify`) has no whitespace. Object keys are sorted by UTF-16 code unit. `undefined` object entries are dropped. `undefined` array entries become `null`. Strings, numbers, booleans, and `null` use `JSON.stringify`. `audit verify` parses each line and re-canonicalizes, so key order in the file does not matter. A rewritten line, a swapped `prevHash`, or a line deleted from the middle of the chain fails verification. Opening a log that fails verification refuses to start.
+
+**Taint.** `taint` on an event is the session state before that event. The event that introduces taint still records the previous state. The next event records the updated state, including the new source. Milestone 1 always writes `{ tainted: false, sources: [] }`.
+
+**Approvals.** A pending call is an `approve_pending` record with `expiresAt`. The later decision (`approved`, `denied_by_human`, or `timeout`) sets `approval.pendingId` to that pending record's `id`, so two retries with the same arguments still pair to the right call. An approval is once-only: it resolves that pending id and does not allow the next identical call.
+
+An allowed call is two lines: intent, then outcome. A denial is one line. `argsRedacted` masks values whose keys look like secrets, plus email addresses, `Bearer` tokens, and `sk-` tokens in strings. `argsHash` covers the raw arguments, which are not stored. This is not the heuristic scanner. `scanner.verdict` of `"blocked"` is the audit value for scanner `mode: block`. Hit `target` says whether the span was in the arguments, the tool result, or a tool description, and `path` is the field path inside that value.
 
 ## Repository
 
@@ -143,11 +163,17 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | --- | --- |
 | 1 (this PR) | Pass-through proxy, namespaced catalog, write-ahead audit log |
 | 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
-| 3 | Heuristic scanner, wrap / warn / block, session taint |
-| 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules |
+| 3 | Heuristic scanner, wrap / warn / block, session taint recorded on the following event |
+| 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules. Approvals are once-only in v0.1 |
 | 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
-| 6 | Attack suite, scored results, v0.1 release |
+| 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |
 | Later | Optional classifier, HTTP client with OAuth, container sandbox, multi-agent identity |
+
+Decisions for later milestones, not built here:
+
+- Approvals in v0.1 are once-only. A decision names `approval.pendingId` and does not grant a later identical call.
+- The demo policy has no `allowDomains` on `mail__send`. The no-send-after-untrusted flow rule is what holds that send for a person.
+- The hosted static audit replay ships in v0.1 on anthonysdigital.net.
 
 ## Known gaps
 

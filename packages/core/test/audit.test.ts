@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GENESIS_HASH,
   JsonlAuditLog,
+  auditEventSchema,
   eventHash,
+  sha256,
+  stableStringify,
   ulid,
   verifyAuditJsonl,
   type NewAuditEvent,
@@ -62,6 +65,65 @@ describe("audit log", () => {
     const swapped = { ...second, prevHash: GENESIS_HASH, hash: second.hash };
     const relinked = [first, swapped].map((event) => JSON.stringify(event)).join("\n") + "\n";
     expect(verifyAuditJsonl(relinked).ok).toBe(false);
+  });
+
+  it("hashes prevHash plus canonical JSON, and key order does not matter", () => {
+    const first = sealed(sample("tools/list"), GENESIS_HASH);
+    const { hash, ...rest } = first;
+    const canonical = stableStringify(rest);
+    expect(hash).toBe(sha256(rest.prevHash + canonical));
+    expect(hash).not.toBe(sha256(canonical));
+    expect(rest.prevHash).toBe(GENESIS_HASH);
+    expect(GENESIS_HASH).toBe("0".repeat(64));
+
+    const parsed = JSON.parse(stableStringify(first)) as Record<string, unknown>;
+    const keys = Object.keys(parsed).reverse();
+    const flipped = `{${keys.map((key) => `${JSON.stringify(key)}:${JSON.stringify(parsed[key])}`).join(",")}}`;
+    expect(flipped.startsWith('{"hash"')).toBe(false);
+    expect(verifyAuditJsonl(`${flipped}\n`).ok).toBe(true);
+  });
+
+  it("accepts pendingId, expiresAt, and a blocked scanner hit", () => {
+    const pending = sealed(
+      {
+        ...sample("tools/call", "mail__send"),
+        decision: "approve_pending",
+        expiresAt: "2026-12-01T00:02:00.000Z",
+        approval: { channel: "dashboard" },
+      },
+      GENESIS_HASH,
+    );
+    expect(auditEventSchema.parse(pending).expiresAt).toBe("2026-12-01T00:02:00.000Z");
+
+    const decision = sealed(
+      {
+        ...sample("tools/call", "mail__send"),
+        decision: "approved",
+        approval: { channel: "dashboard", by: "anthony", latencyMs: 40, pendingId: pending.id },
+        scanner: {
+          verdict: "blocked",
+          hits: [{ rule: "instruction-override", span: [1, 4], target: "args", path: "body" }],
+        },
+      },
+      pending.hash,
+    );
+    const parsed = auditEventSchema.parse(decision);
+    expect(parsed.approval?.pendingId).toBe(pending.id);
+    expect(parsed.scanner?.verdict).toBe("blocked");
+    expect(parsed.scanner?.hits[0]).toEqual({
+      rule: "instruction-override",
+      span: [1, 4],
+      target: "args",
+      path: "body",
+    });
+
+    const missingTarget = {
+      ...decision,
+      scanner: { verdict: "flagged", hits: [{ rule: "x", span: [0, 1], path: "body" }] },
+    };
+    expect(auditEventSchema.safeParse(missingTarget).success).toBe(false);
+    const chain = [pending, decision].map((event) => JSON.stringify(event)).join("\n") + "\n";
+    expect(verifyAuditJsonl(chain).ok).toBe(true);
   });
 });
 
