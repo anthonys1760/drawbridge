@@ -9,6 +9,7 @@ import {
   eventHash,
   sha256,
   stableStringify,
+  taintAfterIfChanged,
   ulid,
   verifyAuditJsonl,
   type NewAuditEvent,
@@ -124,6 +125,38 @@ describe("audit log", () => {
     expect(auditEventSchema.safeParse(missingTarget).success).toBe(false);
     const chain = [pending, decision].map((event) => JSON.stringify(event)).join("\n") + "\n";
     expect(verifyAuditJsonl(chain).ok).toBe(true);
+  });
+
+  it("records taintAfter only when session taint changes, and hashes that field", () => {
+    const before = { tainted: false, sources: [] as string[] };
+    expect(taintAfterIfChanged(before, { tainted: false, sources: [] })).toBeUndefined();
+
+    const after = { tainted: true, sources: ["notes"] };
+    expect(taintAfterIfChanged(before, after)).toEqual(after);
+    expect(taintAfterIfChanged(before, { tainted: true, sources: ["notes", "mail"] })?.sources).toEqual([
+      "notes",
+      "mail",
+    ]);
+
+    const event = sealed(
+      { ...sample("tools/call", "notes__read"), taint: before, taintAfter: after },
+      GENESIS_HASH,
+    );
+    expect(auditEventSchema.parse(event).taintAfter).toEqual(after);
+    const { hash, ...rest } = event;
+    const canonical = stableStringify(rest);
+    expect(canonical).toContain('"taintAfter"');
+    expect(hash).toBe(sha256(rest.prevHash + canonical));
+
+    const tampered = { ...event, taintAfter: { tainted: true, sources: ["mail"] } };
+    const broken = verifyAuditJsonl(`${JSON.stringify(tampered)}\n`);
+    expect(broken.ok).toBe(false);
+
+    const unchanged = sealed({ ...sample("tools/list"), taint: before }, GENESIS_HASH);
+    expect(unchanged).not.toHaveProperty("taintAfter");
+    expect(verifyAuditJsonl(`${JSON.stringify(event)}\n${JSON.stringify(unchanged)}\n`).ok).toBe(false);
+    const linked = sealed({ ...sample("tools/list"), taint: before }, event.hash);
+    expect(verifyAuditJsonl(`${JSON.stringify(event)}\n${JSON.stringify(linked)}\n`).ok).toBe(true);
   });
 });
 

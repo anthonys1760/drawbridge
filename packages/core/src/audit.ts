@@ -13,8 +13,9 @@ import { ulid } from "./ulid.js";
  * upstream is contacted (no `resultHash` / `durationMs`), then an outcome
  * record written after. A denial is a single record and is not forwarded.
  *
- * `taint` is the session state before this event. The event that introduces
- * taint still records the previous state; the next event records the update.
+ * `taint` is the session state before this event (what policy sees).
+ * `taintAfter` is set only when this event changes that state, so replay can
+ * show the flip on the event that introduced the untrusted content.
  * See the README audit schema.
  *
  * A decision that resolves an `approve_pending` record sets
@@ -66,6 +67,8 @@ export const auditEventSchema = z.strictObject({
   ruleId: z.string().optional(),
   reason: z.string().optional(),
   taint: auditTaintSchema,
+  /** Session taint after this event. Omitted when it equals `taint`. */
+  taintAfter: auditTaintSchema.optional(),
   scanner: auditScannerSchema.optional(),
   approval: auditApprovalSchema.optional(),
   /** ISO 8601 UTC. Set on `approve_pending` records. */
@@ -90,6 +93,19 @@ export type NewAuditEvent = Omit<AuditEvent, "id" | "ts" | "prevHash" | "hash">;
 
 /** Hash of a chain that has no previous event. 64 zero hex characters. */
 export const GENESIS_HASH = "0".repeat(64);
+
+/**
+ * The value to store in `taintAfter`, or `undefined` when the session taint
+ * did not change. Callers omit the field in that case.
+ */
+export function taintAfterIfChanged(before: AuditTaint, after: AuditTaint): AuditTaint | undefined {
+  if (before.tainted === after.tainted && sameSources(before.sources, after.sources)) return undefined;
+  return after;
+}
+
+function sameSources(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((source, index) => source === right[index]);
+}
 
 export interface AuditVerifyOk {
   ok: true;

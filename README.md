@@ -108,7 +108,8 @@ interface AuditEvent {
   decision: "allow" | "deny" | "approve_pending" | "approved" | "denied_by_human" | "timeout";
   ruleId?: string;
   reason?: string;
-  taint: { tainted: boolean; sources: string[] };
+  taint: { tainted: boolean; sources: string[] }; // session state before this event
+  taintAfter?: { tainted: boolean; sources: string[] }; // only when it differs from taint
   scanner?: {
     verdict: "clean" | "flagged" | "wrapped" | "blocked";
     hits: {
@@ -136,7 +137,7 @@ interface AuditEvent {
 
 Canonical JSON (`stableStringify`) has no whitespace. Object keys are sorted by UTF-16 code unit. `undefined` object entries are dropped. `undefined` array entries become `null`. Strings, numbers, booleans, and `null` use `JSON.stringify`. `audit verify` parses each line and re-canonicalizes, so key order in the file does not matter. A rewritten line, a swapped `prevHash`, or a line deleted from the middle of the chain fails verification. Opening a log that fails verification refuses to start.
 
-**Taint.** `taint` on an event is the session state before that event. The event that introduces taint still records the previous state. The next event records the updated state, including the new source. Milestone 1 always writes `{ tainted: false, sources: [] }`.
+**Taint.** `taint` is the session state before the event, which is what policy sees. `taintAfter` is optional and is written only when this event changes that state. It is omitted when the two are equal, including the same `sources` in the same order. Replay uses `taintAfter` to show the flip on the event that introduced the untrusted content. The next event's `taint` is then that new state. `taintAfter` is part of the hashed canonical JSON, like every other field. Milestone 1 never changes session taint, so the records it writes have no `taintAfter`.
 
 **Approvals.** A pending call is an `approve_pending` record with `expiresAt`. The later decision (`approved`, `denied_by_human`, or `timeout`) sets `approval.pendingId` to that pending record's `id`, so two retries with the same arguments still pair to the right call. An approval is once-only: it resolves that pending id and does not allow the next identical call.
 
@@ -163,7 +164,7 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | --- | --- |
 | 1 (this PR) | Pass-through proxy, namespaced catalog, write-ahead audit log |
 | 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
-| 3 | Heuristic scanner, wrap / warn / block, session taint recorded on the following event |
+| 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
 | 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules. Approvals are once-only in v0.1 |
 | 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
 | 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |

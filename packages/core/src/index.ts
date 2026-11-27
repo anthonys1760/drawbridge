@@ -23,6 +23,7 @@ export {
   auditScannerHitSchema,
   auditScannerSchema,
   eventHash,
+  taintAfterIfChanged,
   verifyAuditJsonl,
   type AuditApproval,
   type AuditDecision,

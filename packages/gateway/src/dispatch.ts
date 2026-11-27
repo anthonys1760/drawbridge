@@ -7,7 +7,9 @@ import {
   redact,
   sha256,
   stableStringify,
+  taintAfterIfChanged,
   type AuditSink,
+  type AuditTaint,
   type NewAuditEvent,
   type PolicyClient,
   type PolicyEngine,
@@ -82,6 +84,7 @@ export async function handleToolsList(
       throw new Error(failure);
     }
     let scanner = undefined;
+    let taintAfter: AuditTaint | undefined;
     try {
       const post = await deps.policy.postResult({
         sessionId: deps.sessionId,
@@ -91,6 +94,7 @@ export async function handleToolsList(
         trusted: pool.trusted(upstream),
         client: input.client,
       });
+      if (post.taint) taintAfter = taintAfterIfChanged(base.taint, post.taint);
       if (post.scanner) scanner = post.scanner;
     } catch (error) {
       const failure = `post-result hook failed for upstream "${upstream}": ${message(error)}`;
@@ -106,6 +110,7 @@ export async function handleToolsList(
     }
     await appendOrThrow(deps.audit, {
       ...base,
+      ...(taintAfter ? { taintAfter } : {}),
       ...(scanner ? { scanner } : {}),
       resultHash: sha256(stableStringify(listed.map((tool) => tool.name))),
       durationMs: Date.now() - started,
@@ -205,6 +210,7 @@ export async function handleToolCall(
 
   let finalResult = result;
   let scanner = undefined;
+  let taintAfter: AuditTaint | undefined;
   try {
     const post = await deps.policy.postResult({
       sessionId: deps.sessionId,
@@ -216,7 +222,7 @@ export async function handleToolCall(
       client: input.client,
     });
     finalResult = asToolResult(post.result, result);
-    // post.taint would apply to the next event. This record keeps base.taint.
+    if (post.taint) taintAfter = taintAfterIfChanged(base.taint, post.taint);
     if (post.scanner) scanner = post.scanner;
   } catch (error) {
     finalResult = textError(`post-result hook failed; result withheld (${message(error)})`);
@@ -224,6 +230,7 @@ export async function handleToolCall(
 
   const outcome = await appendQuiet(deps.audit, {
     ...base,
+    ...(taintAfter ? { taintAfter } : {}),
     ...(scanner ? { scanner } : {}),
     resultHash: sha256(stableStringify(finalResult)),
     durationMs: Date.now() - started,
