@@ -1,0 +1,27 @@
+{
+  "name": "drawbridge",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Drawbridge is an MCP security gateway: a stdio proxy in front of upstream MCP servers, with a tamper-evident audit log.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "eslint .",
+    "test": "pnpm build && vitest run",
+    "check": "pnpm test && pnpm typecheck && pnpm lint && node scripts/scan-secrets.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^22.19.1",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.0",
+    "vitest": "^4.0.14"
+  }
+}

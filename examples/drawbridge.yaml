@@ -1,0 +1,22 @@
+# Drawbridge milestone 1. Policy sections (rules, flows, scanner, approval)
+# are rejected on purpose until they are enforced. See README.
+version: 1
+
+audit:
+  path: ./drawbridge-audit.jsonl
+
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "examples/demo-upstream/dist/index.js"]
+    trusted: false
+
+  # Streamable HTTP upstream. Values like ${REMOTE_MCP_TOKEN} are read from
+  # the gateway process environment. The MCP client's own credentials are
+  # never forwarded. Uncomment and point url at a running server:
+  #
+  # remote:
+  #   transport: http
+  #   url: http://127.0.0.1:3000/mcp
+  #   headers:
+  #     Authorization: ${REMOTE_MCP_TOKEN}
