@@ -14,7 +14,9 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "eslint .",
     "test": "pnpm build && vitest run",
-    "check": "pnpm test && pnpm typecheck && pnpm lint && node scripts/scan-secrets.mjs"
+    "check": "pnpm test && pnpm typecheck && pnpm lint && node scripts/scan-secrets.mjs",
+    "attacks": "pnpm build && node attacks/run.mjs",
+    "demo": "node examples/demo.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

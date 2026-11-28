@@ -54,7 +54,7 @@ rules:
     action: allow
     args:
       path:
-        pattern: '^(?:notes/.*\.md|q4-notes)$'
+        pattern: '^(?:notes/.*\.md|q4-notes|q4-roadmap)$'
         maxLength: 200
   - tool: notes__echo
     action: allow
