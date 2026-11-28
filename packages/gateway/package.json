@@ -1,0 +1,32 @@
+{
+  "name": "@drawbridge/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Drawbridge gateway: stdio MCP server, upstream router, and CLI.",
+  "bin": {
+    "drawbridge": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@drawbridge/core": "workspace:*",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/node": "2.1.2"
+  }
+}
