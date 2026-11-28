@@ -60,7 +60,7 @@ Mitigations:
 
 - Drawbridge connects as itself (`packages/gateway/src/upstreams.ts`). The stdio child gets a short default environment plus that upstream's own `env` and `secrets`. The HTTP request gets that upstream's headers and secrets only.
 - `stripClientCredentials` in `packages/core/src/redact.ts` removes argument keys that look like tokens, passwords, or authorization before `callTool`. The audit line records the path and stores `[REDACTED]`.
-- `secrets` values have to be `env:NAME` or `file:PATH` (`packages/core/src/secrets.ts`, checked from `packages/core/src/config.ts`). An inline value refuses startup, and that error does not include the value.
+- `secrets` is the supported way to give an upstream a credential. Values have to be `env:NAME` or `file:PATH` (`packages/core/src/secrets.ts`, checked from `packages/core/src/config.ts`). An inline value refuses startup, and that error does not include the value. A credential-shaped literal left in `env` or `headers` still starts, and `serve` prints a warning that names the key and does not print the value (`credentialLiteralWarnings`).
 - Resolved values are scrubbed from connection errors and from upstream stderr (`createScrubber`, used by `packages/gateway/src/upstreams.ts`).
 
 ### Secret leakage
@@ -101,3 +101,12 @@ An operator needs every new call to stop, including ones already waiting, and th
 - Hiding a secret from the upstream it was configured for. That upstream is supposed to receive it.
 - The hosted audit replay, the attack suite, and release provenance. Those are milestone 6.
 - Guaranteeing that a person notices an exfil flag. The flag is on the pending call. Approving still forwards that one call.
+
+## Known limits
+
+`secrets` is the supported path for an upstream credential. These limits stay in this version:
+
+- `env` and `headers` can still hold a literal string or a `${VAR}`. Startup prints a warning when that entry looks credential-shaped: an Authorization header, a Bearer value, a name ending in `_TOKEN`, `_KEY`, or `_SECRET`, or a password. The warning names the upstream and the key. It does not print the value, and it does not refuse to start.
+- Client credentials are stripped by argument key (`token`, `authorization`, `api_key`, and the same family), including nested keys. A token pasted into a free-text field such as `message` is forwarded. Bearer-shaped text in a stored string is still redacted in the audit log.
+- Pause and resume reuse the existing decisions `deny` and `allow`, with rule ids `kill:paused` and `kill:resumed`. There is no separate audit method.
+- `tools/list` while paused throws `All calls paused` instead of writing a `tools/call` denial. A new `tools/call` does write that denial.

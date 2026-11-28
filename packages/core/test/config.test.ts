@@ -41,9 +41,9 @@ upstreams:
     transport: http
     url: http://127.0.0.1:\${PORT}/mcp
     headers:
-      Authorization: Bearer \${TOKEN}
+      X-Region: \${REGION}
 `,
-      { AUDIT_DIR: "/tmp/db", PORT: "9", TOKEN: "sekret" },
+      { AUDIT_DIR: "/tmp/db", PORT: "9", REGION: "us" },
     );
     expect(config.audit.path).toBe("/tmp/db/audit.jsonl");
     expect(config.upstreams[0]?.name).toBe("remote");
@@ -51,7 +51,7 @@ upstreams:
     expect(upstream?.transport).toBe("http");
     if (upstream?.transport === "http") {
       expect(upstream.url).toBe("http://127.0.0.1:9/mcp");
-      expect(upstream.headers?.Authorization).toBe("Bearer sekret");
+      expect(upstream.headers?.["X-Region"]).toBe("us");
     }
   });
 

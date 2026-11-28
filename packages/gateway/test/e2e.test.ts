@@ -56,8 +56,8 @@ upstreams:
   remote:
     transport: http
     url: ${remote.url}
-    headers:
-      Authorization: Bearer \${REMOTE_TOKEN}
+    secrets:
+      Authorization: env:REMOTE_TOKEN
 `,
     );
 
@@ -65,7 +65,7 @@ upstreams:
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [cli, "serve", "--config", configPath],
-      env: { ...getDefaultEnvironment(), REMOTE_TOKEN: TOKEN },
+      env: { ...getDefaultEnvironment(), REMOTE_TOKEN: `Bearer ${TOKEN}` },
       stderr: "pipe",
     });
     transport.stderr?.on("data", (chunk: Buffer | string) => {
@@ -142,6 +142,8 @@ upstreams:
     expect(failed.status).toBe(1);
     expect(failed.stderr).toMatch(/hash does not match/);
     expect(stderr.join("")).not.toContain(SECRET);
+    expect(stderr.join("")).not.toContain(TOKEN);
+    expect(stderr.join("")).not.toContain("looks like a credential");
   }, 30_000);
 
   it("verifies a chained log that contains taintAfter and resumes it on startup", async () => {
@@ -627,6 +629,39 @@ upstreams:
     expect(log).toContain("Stripped client credentials");
     expect(verifyAuditJsonl(log).ok).toBe(true);
   }, 45_000);
+
+  it("warns at startup when an env literal looks like a credential and does not print it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-warn-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    const seed = "seed-warn-token-hhhh";
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+rules:
+  - tool: notes__echo
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    env:
+      API_TOKEN: ${seed}
+`,
+    );
+    const gateway = await connectGateway(configPath);
+    await gateway.client.callTool({ name: "notes__echo", arguments: { message: "hello" } });
+    await gateway.close();
+    const stderr = gateway.stderr.join("");
+    expect(stderr).toContain('upstream "notes" env.API_TOKEN looks like a credential');
+    expect(stderr).toContain("Use secrets");
+    expect(stderr).not.toContain(seed);
+  }, 30_000);
 
   it("pauses through the CLI, denies new calls, and stays paused across a restart", async () => {
     const dir = await mkdtemp(join(tmpdir(), "drawbridge-pause-"));

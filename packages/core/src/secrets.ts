@@ -5,6 +5,8 @@ import { ConfigError } from "./errors.js";
 const ENV_REF = /^env:[A-Za-z_][A-Za-z0-9_]*$/;
 const FILE_REF = /^file:\S+$/;
 const SECRET_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const CREDENTIAL_KEY = /(?:^|[_-])(?:token|key|secret|password|passwd|bearer)$|authorization|api[-_]?key/i;
+const BEARER_VALUE = /^Bearer\s+\S+/i;
 
 /**
  * A secret value in drawbridge.yaml is a reference, never the secret itself.
@@ -14,6 +16,36 @@ export function assertSecretRef(upstream: string, key: string, value: string): v
   if (!SECRET_NAME.test(key) || (!ENV_REF.test(value) && !FILE_REF.test(value))) {
     throw new ConfigError(
       `Upstream "${upstream}" secret "${key}" must be an env:NAME or file:PATH reference. Inline values are refused.`,
+    );
+  }
+}
+
+/**
+ * `env` and `headers` still accept a literal. Startup warns when one looks
+ * like a credential. The message names the key and never includes the value.
+ * `secrets` is the supported path and is not warned about.
+ */
+export function credentialLiteralWarnings(upstreams: { name: string; upstream: UpstreamConfig }[]): string[] {
+  const warnings: string[] = [];
+  for (const entry of upstreams) {
+    const upstream = entry.upstream;
+    if (upstream.transport === "stdio") collect(warnings, entry.name, "env", upstream.env);
+    if (upstream.transport === "http") collect(warnings, entry.name, "headers", upstream.headers);
+  }
+  return warnings;
+}
+
+function collect(
+  warnings: string[],
+  upstream: string,
+  where: "env" | "headers",
+  values: Record<string, string> | undefined,
+): void {
+  for (const [key, value] of Object.entries(values ?? {})) {
+    if (value.length === 0) continue;
+    if (!CREDENTIAL_KEY.test(key) && !BEARER_VALUE.test(value)) continue;
+    warnings.push(
+      `drawbridge: upstream "${upstream}" ${where}.${key} looks like a credential. Use secrets with an env: or file: reference. The value was not logged.`,
     );
   }
 }

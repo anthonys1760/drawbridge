@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { createScrubber, envForStdio, headersForHttp, resolveUpstreamSecrets, stripClientCredentials } from "../src/index.js";
+import { createScrubber, credentialLiteralWarnings, envForStdio, headersForHttp, loadConfig, resolveUpstreamSecrets, stripClientCredentials } from "../src/index.js";
 import type { UpstreamConfig } from "../src/config.js";
 
 const ALPHA = "seed-alpha-secret-aaaa";
@@ -72,6 +72,56 @@ describe("per-upstream secrets", () => {
     });
     expect(seen.stdout).toBe(`${ALPHA}|`);
     expect(process.env.ONLY_A).toBeUndefined();
+  });
+
+  it("warns on a credential-shaped env or header literal without repeating the value", () => {
+    const seed = "seed-warn-token-hhhh";
+    const config = loadConfig(
+      `
+version: 1
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
+    env:
+      API_TOKEN: ${seed}
+      MAIL_SECRET: ${seed}
+      SIGNING_KEY: ${seed}
+      DB_PASSWORD: ${seed}
+      PATH: /usr/bin
+  remote:
+    transport: http
+    url: http://127.0.0.1:9/mcp
+    headers:
+      Authorization: Bearer \${TOKEN}
+      X-Custom: Bearer \${TOKEN}
+      X-Region: us
+`,
+      { TOKEN: seed },
+    );
+    const warnings = credentialLiteralWarnings(config.upstreams);
+    expect(warnings.map((line) => line.slice(line.indexOf(" "), line.indexOf(" looks")))).toEqual([
+      ' upstream "notes" env.API_TOKEN',
+      ' upstream "notes" env.MAIL_SECRET',
+      ' upstream "notes" env.SIGNING_KEY',
+      ' upstream "notes" env.DB_PASSWORD',
+      ' upstream "remote" headers.Authorization',
+      ' upstream "remote" headers.X-Custom',
+    ]);
+    expect(warnings.join("\n")).not.toContain(seed);
+    expect(warnings.every((line) => line.includes("Use secrets"))).toBe(true);
+    const quiet = loadConfig(`
+version: 1
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
+    env:
+      PATH: /usr/bin
+    secrets:
+      API_TOKEN: env:API_TOKEN
+`);
+    expect(credentialLiteralWarnings(quiet.upstreams)).toEqual([]);
   });
 
   it("scrubs known secrets and strips client credential keys", () => {

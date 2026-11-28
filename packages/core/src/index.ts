@@ -6,6 +6,7 @@ export { credentialNote, maskEmail, redact, stripClientCredentials } from "./red
 export {
   assertSecretRef,
   createScrubber,
+  credentialLiteralWarnings,
   envForStdio,
   headersForHttp,
   resolveUpstreamSecrets,

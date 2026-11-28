@@ -3,6 +3,7 @@ import {
   JsonlAuditLog,
   UNTAINTED_SESSION,
   YamlPolicy,
+  credentialLiteralWarnings,
   loadPinFile,
   sha256,
   stableStringify,
@@ -27,6 +28,7 @@ export interface ServeOptions {
  * refuses to start), then serve stdio for 2026-07-28 clients only.
  */
 export async function serveConfig(config: DrawbridgeConfig, options: ServeOptions = {}): Promise<void> {
+  for (const warning of credentialLiteralWarnings(config.upstreams)) console.error(warning);
   const sessionId = options.sessionId ?? ulid();
   const audit = await JsonlAuditLog.open(config.audit.path);
   const pins = config.upstreams.some((entry) => entry.upstream.pinTools)
