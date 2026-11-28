@@ -1,7 +1,7 @@
 # Drawbridge example policy.
 # mail__send is allow with no allowDomains. The tainted-session flow is what
-# holds that send. Scanner and approval channels are accepted and not enforced
-# yet (milestones 3 and 4). secretRef is still refused.
+# holds that send. The scanner wraps hits. Approval channels are still not
+# enforced (milestone 4). secretRef is still refused.
 version: 1
 
 audit:
@@ -20,7 +20,7 @@ approval:
   timeoutSeconds: 120
 
 scanner:
-  mode: block
+  mode: wrap
   scanDescriptions: true
   classifier: off
 
@@ -29,6 +29,14 @@ upstreams:
     transport: stdio
     command: ["node", "examples/demo-upstream/dist/index.js"]
     trusted: false
+    pinTools: false
+
+  # Local fixture. `send` is advertised as mail__send. It queues nothing
+  # off-box. trusted so a clean send does not taint; the notes result does.
+  mail:
+    transport: stdio
+    command: ["node", "examples/demo-upstream/dist/index.js", "mail"]
+    trusted: true
     pinTools: false
 
   # Streamable HTTP upstream. Values like ${REMOTE_MCP_TOKEN} are read from

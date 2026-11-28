@@ -4,7 +4,7 @@ Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawb
 
 A one-page placeholder lives in [`site/`](site/) and deploys with GitHub Pages once that source is set to GitHub Actions.
 
-This repository enforces the milestone 2 policy engine on top of the pass-through proxy: allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins. Scanning and approval channels are accepted in the config and are not enforced yet. An approve decision is written as pending and then denied until those channels exist.
+This repository enforces policy and a heuristic scanner. Allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins gate each call. Descriptions and results are scanned in block, warn, or wrap mode. An untrusted tool result taints the session. An approve decision is written as pending and then denied until approval channels exist.
 
 ## Quickstart
 
@@ -16,7 +16,7 @@ pnpm build
 node packages/gateway/dist/cli.js serve --config examples/drawbridge.yaml
 ```
 
-That process speaks MCP **2026-07-28** on stdio and spawns the demo notes server in `examples/demo-upstream`. A client sees `notes__read` and `notes__echo`. Logs go to stderr. Stdout is the protocol stream.
+That process speaks MCP **2026-07-28** on stdio and spawns the demo notes and mail servers in `examples/demo-upstream`. A client sees `notes__read`, `notes__echo`, and `mail__send`. Logs go to stderr. Stdout is the protocol stream. The scanner runs in wrap mode: a hit string comes back between `<<untrusted>>` and `<<end untrusted>>`, the session is tainted, and the next `mail__send` is held.
 
 A 2025 client that opens with `initialize` is rejected. Point a 2026-07-28 client at the command, or use the SDK the way the end-to-end test does (`versionNegotiation: { mode: { pin: "2026-07-28" } }`).
 
@@ -85,7 +85,7 @@ upstreams:
 - `${VAR}` is read from the gateway's environment. An unset variable refuses startup. The value is not the MCP client's credential.
 - Stdio upstreams receive a short safe environment (`PATH`, `HOME`, and the other SDK defaults) plus the keys in `env`. The rest of the gateway's environment is not copied across.
 - `auth` and `secretRef` still refuse startup. Per-upstream secrets are milestone 5.
-- `scanner` and `approval` are validated. `approval.timeoutSeconds` sets `expiresAt` on a pending call (default 120). Channels, `highRisk`, and the scanner are not applied yet.
+- `scanner.mode` is `block`, `warn`, or `wrap` (the example uses `wrap`). `approval.timeoutSeconds` sets `expiresAt` on a pending call (default 120). Approval channels and `highRisk` are not applied yet.
 - `pinTools: true` requires `drawbridge pin --config <file>` first (default pin path `drawbridge.pins.json`). `drawbridge pin update --config <file>` rewrites it. A changed definition is denied, or held when `onPinMismatch` is `approve`.
 
 Rules are first-match-wins, in file order. For `tools/call`:
@@ -101,7 +101,7 @@ Rules are first-match-wins, in file order. For `tools/call`:
 
 Constraints are top-level argument keys (or every element of an array). `pattern` is a JavaScript regular expression. `enum` is an exact string match. `allowDomains` is the domain after the last `@`, compared case-insensitively and not as a subdomain. `maxLength` is the string length. A missing or non-string value denies. An invalid pattern refuses to load the config.
 
-Session taint starts untainted. Milestone 2 does not mark it from tool results. The normative audit rules, including email masking and scanner span indexes, are in [docs/audit-schema.md](docs/audit-schema.md).
+Session taint starts untainted. A tool result from an untrusted upstream marks it tainted, and so does a scanner hit. The normative audit rules, including the wrap delimiters, email masking, and scanner span indexes, are in [docs/audit-schema.md](docs/audit-schema.md).
 
 ## How a call moves
 
@@ -143,7 +143,7 @@ Email local parts in stored arguments keep the domain: `john@outsidecorp.com` is
 ```
 packages/core/        config schema, policy hooks, audit log
 packages/gateway/     CLI, stdio server, upstream router
-examples/demo-upstream/   notes server used by the example and the tests
+examples/demo-upstream/   notes server, and a local mail fixture (`node dist/index.js mail`)
 examples/drawbridge.yaml
 ```
 
@@ -158,8 +158,8 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | Milestone | Build |
 | --- | --- |
 | 1 | Pass-through proxy, namespaced catalog, write-ahead audit log |
-| 2 (this PR) | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
-| 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
+| 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
+| 3 (this PR) | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
 | 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules. Approvals are once-only in v0.1 |
 | 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
 | 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |
@@ -173,7 +173,9 @@ Decisions for later milestones, not built here:
 
 ## Known gaps
 
-- The scanner does not run. `approve` is recorded and then denied until milestone 4. Session taint is not set from tool results until milestone 3, so the demo flow does not hold `mail__send` unless something else has tainted the session.
+- `approve` is recorded and then denied until milestone 4.
+- A tool result from an untrusted upstream taints the session, and so does a scanner hit. The demo flow then holds `mail__send`. Trusted results with no hit do not taint. `scanner.classifier` other than `off` refuses startup; only the heuristics run.
+- In `block` mode the client does not receive the payload. Hit spans for that verdict index the withheld text. `warn` keeps the text (`flagged`). `wrap` returns the text between `<<untrusted>>` and `<<end untrusted>>`, each on its own line (`wrapped`), and spans index that wrapped text.
 - `secretRef` / `auth` still refuse startup.
 - `tools/list` is audited and is not gated by tool rules.
 - `resources/*`, `prompts/*`, and completions are not forwarded. `tools/list` is a single page; a cursor is ignored.

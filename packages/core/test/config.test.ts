@@ -18,8 +18,10 @@ describe("loadConfig", () => {
   it("loads the checked-in example", async () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
     const config = loadConfig(await readFile(join(root, "examples/drawbridge.yaml"), "utf8"));
-    expect(config.upstreams.map((entry) => entry.name)).toEqual(["notes"]);
+    expect(config.upstreams.map((entry) => entry.name)).toEqual(["mail", "notes"]);
     expect(config.upstreams[0]?.upstream.transport).toBe("stdio");
+    expect(config.upstreams[1]?.upstream.transport).toBe("stdio");
+    expect(config.scanner.mode).toBe("wrap");
     expect(config.defaults.action).toBe("deny");
     const send = config.rules.find((rule) => rule.tool === "mail__send");
     expect(send?.action).toBe("allow");
@@ -92,6 +94,17 @@ upstreams:
       secretRef: keychain:mail-token
 `),
     ).toThrow(/secretRef/);
+    expect(() =>
+      loadConfig(`
+version: 1
+scanner:
+  classifier: api
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
+`),
+    ).toThrow(/classifier/);
   });
 
   it("rejects an empty upstream map and a missing env var", () => {

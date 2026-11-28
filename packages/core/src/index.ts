@@ -42,6 +42,19 @@ export {
   type NewAuditEvent,
   type ScannerHitTarget,
 } from "./audit.js";
+export { BENIGN_SAMPLES, INJECTION_SAMPLES } from "./injection-corpus.js";
+export {
+  BLOCKED_DESCRIPTION,
+  BLOCKED_RESULT_TEXT,
+  HEURISTICS,
+  WRAP_PREFIX,
+  WRAP_SUFFIX,
+  applyScanner,
+  blockedToolResult,
+  scanText,
+  type ScannerAllowEntry,
+  type ScannerOptions,
+} from "./scanner.js";
 export { loadPinFile, savePinFile, toolDefinitionHash, type PinFile, type ToolDefinition } from "./pins.js";
 export {
   interpolate,

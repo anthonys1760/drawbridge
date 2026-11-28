@@ -1,6 +1,7 @@
 import type { AuditDecision, AuditMethod, AuditScanner, AuditTaint } from "./audit.js";
 import type { ArgConstraint, DrawbridgeConfig, PolicyAction, PolicyRule, RateLimitConfig } from "./config.js";
 import { toolDefinitionHash, type PinFile, type ToolDefinition } from "./pins.js";
+import { applyScanner } from "./scanner.js";
 
 /**
  * Tool annotation hints copied from an upstream tool definition.
@@ -146,8 +147,8 @@ export interface PolicyRuntime {
  * decision (`deny` over `approve` over `allow`). Argument failures and
  * rate limits deny. Pin mismatches are decided before rules.
  *
- * Session taint is read here and is not updated. Milestone 3's scanner is
- * what will mark a session tainted. Tests can seed it with `seedTaint`.
+ * Session taint starts untainted. A tool result from an untrusted upstream
+ * marks the session tainted, and so does any scanner hit. `seedTaint` is for tests.
  */
 export class YamlPolicy implements PolicyEngine {
   private taint: AuditTaint;
@@ -189,7 +190,25 @@ export class YamlPolicy implements PolicyEngine {
   }
 
   async postResult(input: PostResultInput): Promise<PostResultDecision> {
-    return { result: input.result, taint: this.taint };
+    const scanned = applyScanner(input.result, input.upstream, {
+      mode: this.config.scanner.mode,
+      scanDescriptions: this.config.scanner.scanDescriptions,
+      allowlist: this.config.scanner.allowlist,
+      ...(this.runtime.now ? { now: this.runtime.now() } : {}),
+    });
+    if ((!input.trusted && input.method === "tools/call") || scanned.scanner) {
+      this.markTainted(input.upstream);
+    }
+    return {
+      result: scanned.result,
+      taint: this.taint,
+      ...(scanned.scanner ? { scanner: scanned.scanner } : {}),
+    };
+  }
+
+  private markTainted(upstream: string): void {
+    const sources = this.taint.sources.includes(upstream) ? this.taint.sources : [...this.taint.sources, upstream];
+    this.taint = { tainted: true, sources };
   }
 
   private pinDecision(input: PreCallInput): PreCallDecision | undefined {
