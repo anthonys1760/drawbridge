@@ -174,6 +174,7 @@ export async function startApprovalServer(options: {
   auditPath: string;
   sessionId: string;
   channels: ApprovalChannel[];
+  timeoutSeconds?: number;
 }): Promise<ApprovalServer> {
   const dashboardDir = resolve(fileURLToPath(new URL("../../dashboard/dist", import.meta.url)));
   const fontsDir = resolve(fileURLToPath(new URL("../../../site/fonts", import.meta.url)));
@@ -222,6 +223,7 @@ async function handle(
     auditPath: string;
     sessionId: string;
     channels: ApprovalChannel[];
+    timeoutSeconds?: number;
     dashboardDir: string;
     fontsDir: string;
   },
@@ -292,6 +294,7 @@ async function api(
     auditPath: string;
     sessionId: string;
     channels: ApprovalChannel[];
+    timeoutSeconds?: number;
   },
 ): Promise<void> {
   if (url.pathname === "/api/state" && req.method === "GET") {
@@ -300,6 +303,7 @@ async function api(
       now: new Date().toISOString(),
       paused: options.hub.paused,
       sessionId: options.sessionId,
+      timeoutSeconds: options.timeoutSeconds ?? 120,
       pending: options.hub.list(),
       recent,
     });

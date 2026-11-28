@@ -56,10 +56,11 @@ button { cursor: pointer; }
 
 .app { height: 100%; display: flex; flex-direction: column; }
 .topbar {
-  height: var(--db-topbar-h); display: flex; align-items: center; gap: var(--db-space-3);
+  min-height: var(--db-topbar-h); display: flex; align-items: center; gap: var(--db-space-3);
   padding: 0 var(--db-space-4); border-bottom: var(--db-border-width) solid var(--db-border);
   background: var(--db-surface);
 }
+.top-actions { display: flex; align-items: center; gap: var(--db-space-2); margin-left: auto; }
 .mark { width: 18px; height: 18px; flex: none; }
 .word { font-weight: var(--db-weight-semibold); letter-spacing: var(--db-tracking-tight); }
 .pill {
@@ -116,7 +117,7 @@ button { cursor: pointer; }
 .bar > span { display: block; height: 100%; background: var(--db-warn); }
 .bar.danger > span { background: var(--db-danger); }
 .detail { display: flex; flex-direction: column; background: var(--db-bg); }
-.detail-scroll { flex: 1; overflow: auto; padding: var(--db-space-6) 28px; }
+.detail-scroll { flex: 1; overflow: auto; padding: var(--db-space-6) calc(var(--db-space-6) + var(--db-space-1)); }
 .header { display: flex; flex-wrap: wrap; gap: var(--db-space-2); align-items: center; }
 .header h1 { font-size: var(--db-text-xl); line-height: var(--db-lh-xl); margin: 0 var(--db-space-2) 0 0; font-family: var(--db-font-mono); }
 .panel { margin-top: var(--db-space-6); background: var(--db-surface); border: var(--db-border-width) solid var(--db-border); border-radius: var(--db-radius-lg); padding: var(--db-space-4); }
@@ -126,13 +127,22 @@ button { cursor: pointer; }
 .arrow { color: var(--db-text-subtle); }
 pre.args {
   margin: var(--db-space-3) 0 0; padding: var(--db-space-3); background: var(--db-bg);
-  border-radius: var(--db-radius-md); overflow: auto; font-family: var(--db-font-mono);
-  font-size: var(--db-text-sm); line-height: var(--db-lh-sm);
+  border-radius: var(--db-radius-md); overflow: auto; max-height: 320px;
+  font-family: var(--db-font-mono); font-size: var(--db-text-sm); line-height: var(--db-lh-sm);
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
+.timer.danger { color: var(--db-danger); }
+.spin {
+  width: 14px; height: 14px; margin-right: var(--db-space-2); vertical-align: -2px;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  display: inline-block; animation: db-spin 700ms linear infinite;
+}
+@keyframes db-spin { to { transform: rotate(360deg); } }
 mark.review { background: var(--db-info-soft); color: var(--db-text); }
+mark.hit { background: var(--db-taint-mark); color: var(--db-text); text-decoration: underline; }
 .actions {
   height: var(--db-actionbar-h); display: flex; align-items: center; gap: var(--db-space-3);
-  padding: 0 28px; border-top: var(--db-border-width) solid var(--db-border); background: var(--db-surface);
+  padding: 0 calc(var(--db-space-6) + var(--db-space-1)); border-top: var(--db-border-width) solid var(--db-border); background: var(--db-surface);
 }
 .actions.approved { background: var(--db-accent-soft); }
 .actions.denied { background: var(--db-danger-soft); }
@@ -152,6 +162,7 @@ dialog::backdrop { background: var(--db-overlay); }
 .tabs { display: none; gap: var(--db-space-2); margin-bottom: var(--db-space-3); }
 .live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
+.back { display: none; background: none; border: 0; color: var(--db-info); padding: 0; margin-bottom: var(--db-space-3); }
 .embedded { display: none; }
 @media (max-width: 1199px) {
   .body { grid-template-columns: 300px 1fr; }
@@ -169,5 +180,10 @@ dialog::backdrop { background: var(--db-overlay); }
   .danger-btn, .primary { height: var(--db-target-min); }
   .chain { flex-direction: column; align-items: stretch; }
   .back { display: inline-flex; }
+  .topbar { height: auto; flex-wrap: wrap; row-gap: var(--db-space-2); padding-top: var(--db-space-2); padding-bottom: var(--db-space-2); }
+  .top-actions { margin-left: 0; flex-wrap: wrap; }
+  .top-actions .ghost { height: var(--db-target-min); padding: 0 var(--db-space-3); }
 }
-.back { display: none; background: none; border: 0; color: var(--db-info); padding: 0; margin-bottom: var(--db-space-3); }
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+}

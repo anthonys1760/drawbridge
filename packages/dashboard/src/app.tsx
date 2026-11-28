@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { scale } from "../../../docs/design/tokens";
+import {
+  chainSteps,
+  countdownLabel,
+  defaultSelection,
+  hitNote,
+  noteId,
+  renderArgs,
+  timeoutAnnouncements,
+  type ViewHit,
+} from "./view";
 
 interface Taint {
   tainted: boolean;
   sources: string[];
-}
-interface Hit {
-  rule: string;
-  path: string;
-  span: [number, number];
-  note?: string;
 }
 interface Call {
   id: string;
@@ -24,7 +28,7 @@ interface Call {
   argsRedacted?: unknown;
   argsHash?: string;
   taint?: Taint;
-  scanner?: { verdict?: string; hits?: Hit[] };
+  scanner?: { verdict?: string; hits?: ViewHit[] };
   decision?: string;
   approval?: { pendingId?: string; channel?: string; by?: string; latencyMs?: number };
   taintAfter?: Taint;
@@ -34,6 +38,7 @@ interface State {
   now: string;
   paused: boolean;
   sessionId: string;
+  timeoutSeconds?: number;
   pending: Call[];
   recent: Call[];
 }
@@ -59,9 +64,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [clockOffset, setClockOffset] = useState(0);
   const [now, setNow] = useState(Date.now());
-  const [announce, setAnnounce] = useState("");
-  const [timerNote, setTimerNote] = useState("");
-  const [toast, setToast] = useState("");
+  const [live, setLive] = useState("");
   const [theme, setTheme] = useState(localStorage.getItem("db-theme") ?? "dark");
   const [shortcuts, setShortcuts] = useState(localStorage.getItem("db-shortcuts") !== "off");
   const seen = useRef(new Set<string>());
@@ -72,6 +75,14 @@ export function App() {
   const pauseRef = useRef<HTMLDialogElement>(null);
   const helpRef = useRef<HTMLDialogElement>(null);
   const armedTimer = useRef<number | undefined>(undefined);
+  const liveTimer = useRef<number | undefined>(undefined);
+  const sayRef = useRef<(message: string) => void>(() => undefined);
+
+  sayRef.current = (message: string) => {
+    window.clearTimeout(liveTimer.current);
+    setLive("");
+    liveTimer.current = window.setTimeout(() => setLive(message), 40);
+  };
 
   useEffect(() => {
     if (theme === "system") document.documentElement.removeAttribute("data-theme");
@@ -103,18 +114,20 @@ export function App() {
           const body = (await response.json()) as State;
           setState(body);
           setOffline(false);
-          for (const call of body.pending) {
-            if (!seen.current.has(call.id)) {
-              seen.current.add(call.id);
-              if (seen.current.size > 1 || document.hasFocus()) {
-                setAnnounce(`New call waiting: ${call.tool ?? call.method ?? "tool"}`);
-              }
-            }
+          const timeouts = timeoutAnnouncements(body.recent, announced.current);
+          for (const event of body.recent) {
+            if (event.decision === "timeout") announced.current.add(event.id);
+          }
+          const fresh = body.pending.filter((call) => !seen.current.has(call.id));
+          for (const call of body.pending) seen.current.add(call.id);
+          if (timeouts[0]) sayRef.current(timeouts[0]);
+          else if (fresh[0] && (seen.current.size > fresh.length || document.hasFocus())) {
+            sayRef.current(`New call waiting: ${fresh[0].tool ?? fresh[0].method ?? "tool"}`);
           }
           const flip = body.recent.find((event) => event.taintAfter?.tainted && event.tool);
           if (flip?.tool && !taintedSeen.current) {
             taintedSeen.current = true;
-            setToast(`Untrusted content entered this session from ${flip.tool}`);
+            if (!timeouts[0] && fresh.length === 0) sayRef.current(`Untrusted content entered this session from ${flip.tool}`);
           }
         } catch {
           setOffline(true);
@@ -129,29 +142,42 @@ export function App() {
   }, []);
 
   const gatewayNow = now + clockOffset;
-  const pending = (state?.pending ?? []).filter((call) =>
+  const timeoutSeconds = state?.timeoutSeconds ?? 120;
+  const allPending = state?.pending ?? [];
+  const pending = allPending.filter((call) =>
     `${call.tool ?? ""} ${call.reason ?? ""}`.toLowerCase().includes(filter.toLowerCase()),
   );
-  const current = pending.find((call) => call.id === selected)
+  const keepIds = (state?.recent ?? []).flatMap((event) => {
+    const ids = event.decision === "approve_pending" ? [event.id] : [];
+    return event.approval?.pendingId ? [...ids, event.approval.pendingId] : ids;
+  });
+  const current = allPending.find((call) => call.id === selected)
     ?? state?.recent.find((event) => event.id === selected)
     ?? null;
-  const waiting = pending.length;
+  const waiting = allPending.length;
+
+  useEffect(() => {
+    const next = defaultSelection(selected, allPending.map((call) => call.id), keepIds);
+    if (next !== selected) setSelected(next);
+  });
 
   useEffect(() => {
     document.title = waiting > 0 ? `(${waiting}) Drawbridge` : "Drawbridge";
   }, [waiting]);
 
+  const recentDecision = state?.recent.find((event) => event.approval?.pendingId === selected);
+
   useEffect(() => {
-    if (!current?.expiresAt || !current.tool) return;
-    const left = Math.ceil((Date.parse(current.expiresAt) - gatewayNow) / 1000);
+    if (!current?.expiresAt || !current.tool || recentDecision) return;
+    const left = secondsLeft(current.expiresAt, gatewayNow);
     for (const mark of [60, 30, 10]) {
       const key = `${current.id}:${mark}`;
       if (left === mark && !announced.current.has(key)) {
         announced.current.add(key);
-        setTimerNote(`${current.tool} auto-deny in ${mark} seconds`);
+        sayRef.current(`${current.tool} auto-deny in ${mark} seconds`);
       }
     }
-  }, [current, gatewayNow]);
+  });
 
   function disarm() {
     setArmed(false);
@@ -184,8 +210,12 @@ export function App() {
       return;
     }
     setArmed(true);
-    setAnnounce("Press A again to approve");
+    sayRef.current("Press A again to approve");
     armedTimer.current = window.setTimeout(() => setArmed(false), 2000);
+  }
+
+  function openShortcuts() {
+    helpRef.current?.showModal();
   }
 
   useEffect(() => {
@@ -199,11 +229,11 @@ export function App() {
         return;
       }
       if (event.key === "Enter" && target?.tagName === "BUTTON") return;
-      if (!shortcuts || typing) return;
-      if (event.key === "?" ) {
-        helpRef.current?.showModal();
+      if (event.key === "?" && !typing) {
+        openShortcuts();
         return;
       }
+      if (!shortcuts || typing) return;
       if (event.key === "P" && event.shiftKey) {
         pauseRef.current?.showModal();
         return;
@@ -252,19 +282,20 @@ export function App() {
     pauseRef.current?.close();
   }
 
-  const recentDecision = state?.recent.find((event) => event.approval?.pendingId === selected);
-  const decided = (state?.recent ?? []).filter((event) => event.approval?.pendingId);
+  const decided = (state?.recent ?? []).filter((event) => event.approval?.pendingId).slice(-6);
+  const steps = current ? chainSteps(current, state?.recent ?? []) : [];
+  const left = secondsLeft(current?.expiresAt, gatewayNow);
+  const expired = current?.expiresAt ? left === 0 : false;
+  const waitingTimeout = expired && !recentDecision && current?.expiresAt !== undefined && gatewayNow - Date.parse(current.expiresAt) >= 5_000;
 
   useEffect(() => {
-    if (current && !recentDecision) denyRef.current?.focus();
+    if (current && !recentDecision) denyRef.current?.focus({ preventScroll: true, focusVisible: true } as FocusOptions);
   }, [current?.id, recentDecision?.id]);
-  const expired = current?.expiresAt ? Date.parse(current.expiresAt) <= gatewayNow : false;
-  const waitingTimeout = expired && !recentDecision;
 
   return (
     <div class="app">
       <a class="skip" href="#call-detail">Skip to call detail</a>
-      <header class="topbar" style={{ height: scale.topbarH }}>
+      <header class="topbar" style={{ minHeight: scale.topbarH }}>
         <svg class="mark" viewBox="0 0 18 18" aria-hidden="true">
           <rect width="18" height="18" rx="4" fill="var(--db-accent)" />
         </svg>
@@ -276,22 +307,31 @@ export function App() {
         ) : (
           <span class="pill">Gateway running</span>
         )}
-        <span class="grow" />
-        <button class="ghost" type="button" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
-          {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System"}
-        </button>
-        <button class="ghost" type="button" onClick={() => pauseRef.current?.showModal()} disabled={offline}>
-          Pause all calls
-        </button>
+        <div class="top-actions">
+          <button class="ghost" type="button" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
+            {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System"}
+          </button>
+          <button class="ghost" type="button" onClick={openShortcuts}>Shortcuts</button>
+          <button class="ghost" type="button" onClick={() => pauseRef.current?.showModal()} disabled={offline}>
+            Pause all calls
+          </button>
+        </div>
       </header>
       <div class={mobileDetail ? "body detail-open" : "body"}>
         <section class="pane queue">
           <h2>Waiting for a decision</h2>
-          <input ref={filterRef} class="filter" placeholder="Filter queue" value={filter} onInput={(event) => setFilter((event.target as HTMLInputElement).value)} />
+          <input
+            ref={filterRef}
+            class="filter"
+            aria-label="Filter queue"
+            placeholder="Filter queue"
+            value={filter}
+            onInput={(event) => setFilter((event.target as HTMLInputElement).value)}
+          />
           {pending.length === 0 ? (
             <div class="empty">
               <strong>No calls waiting</strong>
-              <p>Calls that need a person show up here as they happen. If no one answers within 120 s, Drawbridge denies the call.</p>
+              <p>Calls that need a person show up here as they happen. If no one answers within {timeoutSeconds} s, Drawbridge denies the call.</p>
             </div>
           ) : (
             <div class="list" role="listbox" aria-label="Pending calls">
@@ -309,9 +349,9 @@ export function App() {
                 >
                   <div class="tool">{call.tool ?? call.method}</div>
                   <div class="meta">{call.reason}</div>
-                  <div class="meta">{shortId(call.sessionId)} · {age(call.ts, gatewayNow)} · {countdown(call.expiresAt, gatewayNow)}</div>
+                  <div class="meta">{shortId(call.sessionId)} · {age(call.ts, gatewayNow)} · {countdownLabel(secondsLeft(call.expiresAt, gatewayNow))}</div>
                   {call.taint?.tainted ? <span class="badge warn">Session tainted</span> : null}
-                  <div class={secondsLeft(call.expiresAt, gatewayNow) < 10 ? "bar danger" : "bar"}><span style={{ width: `${bar(call)}%` }} /></div>
+                  <div class={secondsLeft(call.expiresAt, gatewayNow) < 10 ? "bar danger" : "bar"}><span style={{ width: `${bar(call, gatewayNow)}%` }} /></div>
                 </button>
               ))}
             </div>
@@ -320,7 +360,7 @@ export function App() {
             <>
               <h2>Recently decided</h2>
               <div class="list">
-                {decided.slice(0, 6).map((event) => (
+                {decided.map((event) => (
                   <button key={event.id} class="item" type="button" onClick={() => event.approval?.pendingId && setSelected(event.approval.pendingId)}>
                     <div class="tool">{event.tool ?? "call"}</div>
                     <div class="meta">{DECISIONS[event.decision ?? ""] ?? event.decision}</div>
@@ -354,7 +394,9 @@ export function App() {
                   <span class={recentDecision ? (recentDecision.decision === "approved" ? "badge accent" : "badge danger") : "badge warn"}>
                     {recentDecision ? (DECISIONS[recentDecision.decision ?? ""] ?? recentDecision.decision) : DECISIONS.approve_pending}
                   </span>
-                  {recentDecision ? null : <span role="timer">Auto-deny in {countdown(current.expiresAt, gatewayNow)}</span>}
+                  {recentDecision ? null : (
+                    <span role="timer" class={left < 10 ? "timer danger" : "timer"}>Auto-deny in {countdownLabel(left)}</span>
+                  )}
                 </div>
                 <section class="panel">
                   <h2>Why Drawbridge held this call</h2>
@@ -362,15 +404,14 @@ export function App() {
                   <p class="meta">{current.ruleId}</p>
                   <p class="badge warn">Policy saw: {current.taint?.tainted ? "tainted" : "not tainted"}</p>
                   <ol class="chain" aria-label="Why this call was held">
-                    <li>Untrusted read · {(current.taint?.sources ?? []).join(", ") || "session"}</li>
-                    <span class="arrow" aria-hidden="true">→</span>
-                    <li>Scanner · {current.scanner?.verdict ?? "–"}</li>
-                    <span class="arrow" aria-hidden="true">→</span>
-                    <li>Session tainted</li>
-                    <span class="arrow" aria-hidden="true">→</span>
-                    <li>This call · {current.tool}</li>
+                    {steps.map((step, index) => (
+                      <li key={step}>
+                        {step}
+                        {index < steps.length - 1 ? <span class="arrow" aria-hidden="true"> →</span> : null}
+                      </li>
+                    ))}
                   </ol>
-                  <p>The flow rule {current.ruleId} asks a person before any send once a session has read untrusted content. Unanswered calls are denied after 120 s.</p>
+                  <p>The flow rule {current.ruleId} asks a person before any send once a session has read untrusted content. Unanswered calls are denied after {timeoutSeconds} s.</p>
                 </section>
                 <section class="panel">
                   <h2>Arguments</h2>
@@ -384,14 +425,19 @@ export function App() {
               </div>
               <div class={recentDecision ? `actions ${recentDecision.decision === "approved" ? "approved" : "denied"}` : "actions"}>
                 {recentDecision ? (
-                  <p>{outcomeCopy(recentDecision)}</p>
+                  <p>
+                    {outcomeCopy(recentDecision)}
+                    {recentDecision.decision === "approved" ? null : ". Agent received a tool error: Blocked by policy"}
+                  </p>
                 ) : (
                   <>
                     <button ref={denyRef} class="danger-btn" type="button" aria-keyshortcuts="D" disabled={offline || busy !== null} onClick={() => void decide("deny")}>
-                      {busy === "deny" ? "Deny" : "Deny"}
+                      {busy === "deny" ? <span class="spin" aria-hidden="true" /> : null}
+                      Deny
                     </button>
                     <button class="primary" type="button" aria-keyshortcuts="A" disabled={offline || busy !== null} onClick={() => void decide("approve")}>
-                      {busy === "approve" ? "Approve once" : armed ? "Press A again to approve" : "Approve once"}
+                      {busy === "approve" ? <span class="spin" aria-hidden="true" /> : null}
+                      {armed ? "Press A again to approve" : "Approve once"}
                     </button>
                     <p class="hint">
                       {error ?? (waitingTimeout ? "Waiting for the gateway to record the timeout" : "Deny is the safe default. Approving lets this one call through; the next send asks again.")}
@@ -414,22 +460,25 @@ export function App() {
       </dialog>
       <dialog ref={helpRef}>
         <h2>Shortcuts</h2>
-        <p>J and K move the queue. D denies. A then A approves once. Enter activates the focused button, which starts on Deny.</p>
+        <p>J and K move the queue. D denies. A then A approves once. Enter activates the focused button, which starts on Deny. Question mark opens this sheet.</p>
         <label><input type="checkbox" checked={shortcuts} onChange={(event) => { const on = (event.target as HTMLInputElement).checked; setShortcuts(on); localStorage.setItem("db-shortcuts", on ? "on" : "off"); }} /> Single-key shortcuts</label>
         <div class="row"><button class="ghost" type="button" onClick={() => helpRef.current?.close()}>Close</button></div>
       </dialog>
-      <div class="live" aria-live="polite">{announce} {timerNote} {toast}</div>
+      <div class="live" aria-live="polite">{live}</div>
     </div>
   );
 }
 
 function History({ events, current, embedded }: { events: Call[]; current?: string; embedded?: boolean }) {
-  const ordered = [...events].reverse();
+  const listRef = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    listRef.current?.lastElementChild?.scrollIntoView({ block: "nearest" });
+  }, [events.length, current]);
   return (
-    <section class={embedded ? "embedded" : "pane history"} id={embedded ? undefined : "session-history"} tabIndex={-1} aria-label="Session history">
+    <section class={embedded ? "embedded" : "pane history"} id={embedded ? undefined : "session-history"} tabIndex={0} aria-label="Session history">
       <h2>Session history</h2>
-      <ol>
-        {ordered.map((event) => (
+      <ol ref={listRef}>
+        {events.map((event) => (
           <li key={event.id} class={tone(event, current)}>
             <div class="mono">{event.tool ?? event.method ?? event.decision}</div>
             <div class="meta">{DECISIONS[event.decision ?? ""] ?? event.decision} · {event.reason}</div>
@@ -441,18 +490,38 @@ function History({ events, current, embedded }: { events: Call[]; current?: stri
   );
 }
 
-function Args({ value, hits }: { value: unknown; hits: Hit[] }) {
-  const json = JSON.stringify(value ?? {}, null, 2);
+function Args({ value, hits }: { value: unknown; hits: ViewHit[] }) {
   const recipient = typeof value === "object" && value && "to" in value ? String((value as { to?: unknown }).to) : "";
+  const recipientHit = hits.some((hit) => hit.path === "to" || hit.path.endsWith(".to"));
+  const shown = !recipientHit && recipient
+    ? [...hits, { rule: "review", path: "to", span: [0, recipient.length] as [number, number] }]
+    : hits;
+  const pieces = renderArgs(value ?? {}, shown);
+  const notes = shown.filter((hit, index) => shown.findIndex((other) => noteKey(other) === noteKey(hit)) === index);
   return (
     <>
-      <pre class="args">{recipient ? json.replace(recipient, `⟦${recipient}⟧`) : json}</pre>
-      {recipient ? <p id="recipient-note">Review the recipient {recipient}. This is a review highlight, not a scanner hit.</p> : null}
-      {hits.map((hit) => (
-        <p key={`${hit.rule}:${hit.path}`}>Scanner hit {hit.rule}: {hit.note ?? hit.path}</p>
+      <pre class="args">
+        {pieces.map((piece, index) =>
+          piece.hit ? (
+            <mark key={index} class={piece.hit.rule === "review" ? "review" : "hit"} aria-describedby={piece.hit.noteId}>{piece.text}</mark>
+          ) : (
+            piece.text
+          ),
+        )}
+      </pre>
+      {notes.map((hit) => (
+        <p key={noteKey(hit)} id={noteId(hit)}>
+          {hit.rule === "review"
+            ? `Review the recipient ${recipient}. This is a review highlight, not a scanner hit.`
+            : hitNote(hit)}
+        </p>
       ))}
     </>
   );
+}
+
+function noteKey(hit: ViewHit): string {
+  return `${hit.rule}:${hit.path}:${hit.span[0]}:${hit.span[1]}`;
 }
 
 function apiHeaders(): Record<string, string> {
@@ -475,17 +544,10 @@ function secondsLeft(expiresAt: string | undefined, now: number): number {
   return Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
 }
 
-function countdown(expiresAt: string | undefined, now: number): string {
-  const left = secondsLeft(expiresAt, now);
-  const minutes = Math.floor(left / 60);
-  const seconds = left % 60;
-  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
-
-function bar(call: Call): number {
+function bar(call: Call, now: number): number {
   if (!call.ts || !call.expiresAt) return 100;
   const total = Date.parse(call.expiresAt) - Date.parse(call.ts);
-  const left = Date.parse(call.expiresAt) - Date.now();
+  const left = Date.parse(call.expiresAt) - now;
   if (total <= 0) return 0;
   return Math.max(0, Math.min(100, (left / total) * 100));
 }

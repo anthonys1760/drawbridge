@@ -35,6 +35,7 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
     auditPath: config.audit.path,
     sessionId,
     channels: config.approval.channels,
+    timeoutSeconds: config.approval.timeoutSeconds,
   });
   let pool: UpstreamPool | undefined;
   let closed = false;
