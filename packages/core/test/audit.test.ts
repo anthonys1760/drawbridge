@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   GENESIS_HASH,
+  HIT_PATH,
   JsonlAuditLog,
   auditEventSchema,
   eventHash,
@@ -157,6 +158,52 @@ describe("audit log", () => {
     expect(verifyAuditJsonl(`${JSON.stringify(event)}\n${JSON.stringify(unchanged)}\n`).ok).toBe(false);
     const linked = sealed({ ...sample("tools/list"), taint: before }, event.hash);
     expect(verifyAuditJsonl(`${JSON.stringify(event)}\n${JSON.stringify(linked)}\n`).ok).toBe(true);
+  });
+
+  it("accepts bracket paths and intentId, and resumes a log that contains taintAfter", async () => {
+    expect(HIT_PATH.test("content[0].text")).toBe(true);
+    expect(HIT_PATH.test("body")).toBe(true);
+    expect(HIT_PATH.test("content.0.text")).toBe(false);
+    expect(HIT_PATH.test("[0].text")).toBe(false);
+
+    const withPath = sealed(
+      {
+        ...sample("tools/call", "notes__read"),
+        scanner: {
+          verdict: "flagged",
+          hits: [{ rule: "x", span: [0, 1], target: "args", path: "content[0].text" }],
+        },
+      },
+      GENESIS_HASH,
+    );
+    expect(auditEventSchema.parse(withPath).scanner?.hits[0]?.path).toBe("content[0].text");
+    const dotted = {
+      ...withPath,
+      scanner: { verdict: "flagged", hits: [{ rule: "x", span: [0, 1], target: "args", path: "content.0.text" }] },
+    };
+    expect(auditEventSchema.safeParse(dotted).success).toBe(false);
+
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-audit-"));
+    dirs.push(dir);
+    const path = join(dir, "audit.jsonl");
+    const log = await JsonlAuditLog.open(path);
+    const seeded = await log.append({
+      ...sample("tools/call", "notes__read"),
+      taintAfter: { tainted: true, sources: ["notes"] },
+    });
+    await log.close();
+    expect(seeded.taintAfter).toEqual({ tainted: true, sources: ["notes"] });
+
+    const reopened = await JsonlAuditLog.open(path);
+    const outcome = await reopened.append({ ...sample("tools/call", "notes__echo"), intentId: seeded.id });
+    await reopened.close();
+    expect(outcome.intentId).toBe(seeded.id);
+    expect(outcome.prevHash).toBe(seeded.hash);
+
+    const text = await readFile(path, "utf8");
+    const verified = verifyAuditJsonl(text);
+    expect(verified.ok).toBe(true);
+    if (verified.ok) expect(verified.events).toBe(2);
   });
 });
 

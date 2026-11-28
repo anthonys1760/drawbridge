@@ -29,11 +29,68 @@ describe("handleToolCall", () => {
     expect(log).not.toContain("super-secret");
     expect(log).toContain("[REDACTED]");
     expect(verifyAuditJsonl(log).ok).toBe(true);
-    const events = log.trimEnd().split("\n").map((line) => JSON.parse(line) as { resultHash?: string; tool?: string });
+    const events = log
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; intentId?: string; resultHash?: string; prevHash?: string; hash?: string });
     expect(events).toHaveLength(2);
     expect(events[0]?.resultHash).toBeUndefined();
     expect(events[1]?.resultHash).toEqual(expect.any(String));
     expect(events[1]?.prevHash).toBe(events[0]?.hash);
+    expect(events[1]?.intentId).toBe(events[0]?.id);
+  });
+
+  it("records an approve as pending and then denies it without forwarding", async () => {
+    const pool = new FakePool();
+    const approving: PolicyEngine = {
+      async preCall() {
+        return {
+          decision: "approve",
+          ruleId: "flow:no-send-after-untrusted-content",
+          reason: "Untrusted content entered this session",
+          expiresAt: "2026-12-01T00:02:00.000Z",
+          taint: { tainted: true, sources: ["notes"] },
+        };
+      },
+      async postResult(input) {
+        return { result: input.result };
+      },
+    };
+    const { deps, path, close } = await depsWith(pool, approving);
+    const result = await handleToolCall(deps, {
+      name: "notes__echo",
+      args: { message: "q@outside-sample.example" },
+      client: { name: "unit" },
+    });
+    await close();
+
+    expect(pool.calls).toHaveLength(0);
+    expect(text(result)).toContain("milestone 4");
+    const log = await import("node:fs/promises").then((fs) => fs.readFile(path, "utf8"));
+    expect(log).toContain("q•••@outside-sample.example");
+    expect(log).not.toContain("q@outside-sample.example");
+    const events = log
+      .trimEnd()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            id: string;
+            decision: string;
+            expiresAt?: string;
+            intentId?: string;
+            scanner?: unknown;
+            approval?: { pendingId?: string };
+          },
+      );
+    expect(events).toHaveLength(2);
+    expect(events[0]?.decision).toBe("approve_pending");
+    expect(events[0]?.expiresAt).toBe("2026-12-01T00:02:00.000Z");
+    expect(events[1]?.decision).toBe("deny");
+    expect(events[1]?.approval?.pendingId).toBe(events[0]?.id);
+    expect(events[1]?.scanner).toBeUndefined();
+    expect(events[1]?.intentId).toBeUndefined();
+    expect(verifyAuditJsonl(log).ok).toBe(true);
   });
 
   it("does not call the upstream when policy denies or the audit write fails", async () => {

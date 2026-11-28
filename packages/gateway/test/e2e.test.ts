@@ -10,13 +10,15 @@ import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { verifyAuditJsonl } from "@drawbridge/core";
+import { JsonlAuditLog, verifyAuditJsonl } from "@drawbridge/core";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const cli = join(root, "packages/gateway/dist/cli.js");
 const demo = join(root, "examples/demo-upstream/dist/index.js");
 const TOKEN = "test-token-value";
 const SECRET = "super-secret-token";
+const EMAIL = "q@outside-sample.example";
+const MASKED_EMAIL = "q•••@outside-sample.example";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -37,6 +39,15 @@ describe("gateway e2e", () => {
       `version: 1
 audit:
   path: ${auditPath}
+defaults:
+  action: deny
+rules:
+  - tool: notes__echo
+    action: allow
+  - tool: notes__read
+    action: allow
+  - tool: remote__ping
+    action: allow
 upstreams:
   notes:
     transport: stdio
@@ -86,9 +97,10 @@ upstreams:
 
     const echoed = await client.callTool({
       name: "notes__echo",
-      arguments: { message: "hello", token: SECRET },
+      arguments: { message: `hello ${EMAIL}`, token: SECRET },
     });
     expect(text(echoed)).toContain("hello");
+    expect(text(echoed)).toContain(EMAIL);
     expect(text(echoed)).toContain(SECRET);
 
     const note = await client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
@@ -109,6 +121,8 @@ upstreams:
     expect(log).toContain("e2e-client");
     expect(log).toContain("notes__echo");
     expect(log).toContain("[REDACTED]");
+    expect(log).toContain(MASKED_EMAIL);
+    expect(log).not.toContain(EMAIL);
     expect(log).not.toContain(SECRET);
     const verified = verifyAuditJsonl(log);
     expect(verified.ok).toBe(true);
@@ -127,7 +141,150 @@ upstreams:
     expect(failed.stderr).toMatch(/hash does not match/);
     expect(stderr.join("")).not.toContain(SECRET);
   }, 30_000);
+
+  it("verifies a chained log that contains taintAfter and resumes it on startup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-taint-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    const seeded = await JsonlAuditLog.open(auditPath);
+    await seeded.append({
+      sessionId: "prior",
+      client: { name: "seed" },
+      upstream: "notes",
+      method: "tools/call",
+      tool: "notes__echo",
+      argsRedacted: { message: MASKED_EMAIL },
+      argsHash: "abc",
+      decision: "allow",
+      reason: "seeded taint flip",
+      taint: { tainted: false, sources: [] },
+      taintAfter: { tainted: true, sources: ["notes"] },
+    });
+    await seeded.close();
+
+    const before = await readFile(auditPath, "utf8");
+    expect(before).toContain('"taintAfter"');
+    const verified = await runCli(["audit", "verify", "--log", auditPath]);
+    expect(verified.status).toBe(0);
+    expect(verified.stderr).not.toMatch(/not an audit event/);
+
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+rules:
+  - tool: notes__echo
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+`,
+    );
+    const gateway = await connectGateway(configPath);
+    const echoed = await gateway.client.callTool({ name: "notes__echo", arguments: { message: "resume" } });
+    expect(text(echoed)).toContain("resume");
+    expect(gateway.stderr.join("")).not.toMatch(/not an audit event|Refusing to append/);
+    await gateway.close();
+
+    const log = await readFile(auditPath, "utf8");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+    const first = JSON.parse(log.trimStart().split("\n")[0] ?? "{}") as { taintAfter?: { tainted: boolean } };
+    expect(first.taintAfter).toEqual({ tainted: true, sources: ["notes"] });
+    const again = await runCli(["audit", "verify", "--log", auditPath]);
+    expect(again.status).toBe(0);
+  }, 30_000);
+
+  it("pins tool definitions and denies a changed hash", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-pin-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const pinPath = join(dir, "pins.json");
+    const configPath = join(dir, "drawbridge.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+pins:
+  path: ${pinPath}
+defaults:
+  action: deny
+rules:
+  - tool: notes__*
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    pinTools: true
+`,
+    );
+
+    const pinned = await runCli(["pin", "--config", configPath]);
+    expect(pinned.status).toBe(0);
+    const pins = JSON.parse(await readFile(pinPath, "utf8")) as { tools: Record<string, string> };
+    expect(pins.tools.notes__read).toMatch(/^[a-f0-9]{64}$/);
+    expect(pins.tools.notes__echo).toMatch(/^[a-f0-9]{64}$/);
+
+    const first = await connectGateway(configPath);
+    const note = await first.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(note)).toBe("note:notes/a.md");
+    await first.close();
+
+    pins.tools.notes__read = "0".repeat(64);
+    await writeFile(pinPath, `${JSON.stringify(pins, null, 2)}\n`);
+    const second = await connectGateway(configPath);
+    const denied = await second.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(denied.isError).toBe(true);
+    expect(text(denied)).toMatch(/pinned hash/);
+    const echoed = await second.client.callTool({ name: "notes__echo", arguments: { message: "still" } });
+    expect(text(echoed)).toContain("still");
+    await second.close();
+
+    const updated = await runCli(["pin", "update", "--config", configPath]);
+    expect(updated.status).toBe(0);
+    const third = await connectGateway(configPath);
+    const restored = await third.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(restored)).toBe("note:notes/a.md");
+    await third.close();
+
+    const log = await readFile(auditPath, "utf8");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+  }, 60_000);
 });
+
+async function connectGateway(configPath: string, env: Record<string, string> = {}) {
+  const stderr: string[] = [];
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [cli, "serve", "--config", configPath],
+    env: { ...getDefaultEnvironment(), ...env },
+    stderr: "pipe",
+  });
+  transport.stderr?.on("data", (chunk: Buffer | string) => {
+    stderr.push(typeof chunk === "string" ? chunk : chunk.toString());
+  });
+  const client = new Client({ name: "e2e-client", version: "9.0.0" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+  const close = async () => {
+    const pid = transport.pid ?? undefined;
+    await client.close().catch(() => undefined);
+    if (pid !== undefined) await waitForExit(pid);
+  };
+  cleanups.push(close);
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${stderr.join("")}`);
+  }
+  return { client, stderr, close };
+}
 
 function text(result: { content: { type: string; text?: string }[] }): string {
   return result.content.map((block) => block.text ?? "").join("\n");

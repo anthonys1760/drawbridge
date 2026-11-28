@@ -8,14 +8,18 @@ import {
   sha256,
   stableStringify,
   taintAfterIfChanged,
+  type AuditEvent,
   type AuditSink,
   type AuditTaint,
   type NewAuditEvent,
+  type PolicyCallDecision,
   type PolicyClient,
   type PolicyEngine,
 } from "@drawbridge/core";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { CatalogTool, JsonObjectSchema, UpstreamPool } from "./upstreams.js";
+
+const APPROVAL_UNAVAILABLE = "Approval channels are not available until milestone 4, so the call was denied.";
 
 const UNROUTED = "_unrouted";
 
@@ -60,15 +64,16 @@ export async function handleToolsList(
       upstream,
       method: "tools/list",
       args: {},
-      decision: pre.decision,
+      decision: pre.decision === "approve" ? "approve_pending" : pre.decision,
       ruleId: pre.ruleId,
       reason: pre.reason,
+      taint: pre.taint,
     });
     if (!decisionForwards(pre.decision)) {
       await appendOrThrow(deps.audit, base);
       continue;
     }
-    await appendOrThrow(deps.audit, base);
+    const intent = await appendOrThrow(deps.audit, base);
     const started = Date.now();
     let listed: CatalogTool[];
     try {
@@ -77,6 +82,7 @@ export async function handleToolsList(
       const failure = `tools/list failed for upstream "${upstream}": ${message(error)}`;
       await appendOrThrow(deps.audit, {
         ...base,
+        intentId: intent.id,
         reason: failure,
         resultHash: sha256(stableStringify({ error: failure })),
         durationMs: Date.now() - started,
@@ -100,6 +106,7 @@ export async function handleToolsList(
       const failure = `post-result hook failed for upstream "${upstream}": ${message(error)}`;
       await appendOrThrow(deps.audit, {
         ...base,
+        intentId: intent.id,
         decision: "deny",
         ruleId: "hook:post-result",
         reason: failure,
@@ -110,6 +117,7 @@ export async function handleToolsList(
     }
     await appendOrThrow(deps.audit, {
       ...base,
+      intentId: intent.id,
       ...(taintAfter ? { taintAfter } : {}),
       ...(scanner ? { scanner } : {}),
       resultHash: sha256(stableStringify(listed.map((tool) => tool.name))),
@@ -167,6 +175,14 @@ export async function handleToolCall(
     });
   }
 
+  let catalog: "ready" | "unavailable" = "ready";
+  let definition: CatalogTool | undefined;
+  try {
+    const listed = await pool.listTools(routed.upstream);
+    definition = listed.find((tool) => tool.name === routed.tool);
+  } catch {
+    catalog = "unavailable";
+  }
   const pre = await safePreCall(deps.policy, {
     sessionId: deps.sessionId,
     method: "tools/call",
@@ -175,18 +191,24 @@ export async function handleToolCall(
     args: input.args,
     client: input.client,
     trusted: pool.trusted(routed.upstream),
-    annotations: pool.annotations(routed.upstream, routed.tool),
+    annotations: definition?.annotations ?? pool.annotations(routed.upstream, routed.tool),
+    catalog,
+    definition,
   });
-  const base = eventBase(deps, {
+  const baseFields = {
     client: input.client,
     upstream: routed.upstream,
-    method: "tools/call",
+    method: "tools/call" as const,
     tool: input.name,
     args: input.args,
-    decision: pre.decision,
     ruleId: pre.ruleId,
     reason: pre.reason,
-  });
+    taint: pre.taint,
+  };
+  if (pre.decision === "approve") {
+    return holdForApproval(deps, eventBase(deps, { ...baseFields, decision: "approve_pending" }), pre);
+  }
+  const base = eventBase(deps, { ...baseFields, decision: pre.decision });
   if (!decisionForwards(pre.decision)) {
     const recorded = await appendQuiet(deps.audit, base);
     if (!recorded.ok) {
@@ -228,8 +250,11 @@ export async function handleToolCall(
     finalResult = textError(`post-result hook failed; result withheld (${message(error)})`);
   }
 
+  // resultHash covers the result returned to the client. In wrap mode (milestone 3)
+  // that is the wrapped result, and scanner spans index that same text.
   const outcome = await appendQuiet(deps.audit, {
     ...base,
+    intentId: recorded.event.id,
     ...(taintAfter ? { taintAfter } : {}),
     ...(scanner ? { scanner } : {}),
     resultHash: sha256(stableStringify(finalResult)),
@@ -243,6 +268,44 @@ export async function handleToolCall(
 
 export function createDefaultPolicy(): PolicyEngine {
   return new AllowAllPolicy();
+}
+
+/**
+ * Write the pending call, then deny it. Milestone 4 will wait on expiresAt
+ * instead of resolving immediately. The decision line links with pendingId
+ * and does not copy scanner hits from the pending line.
+ */
+async function holdForApproval(
+  deps: GatewayDeps,
+  base: NewAuditEvent,
+  pre: { ruleId?: string; reason?: string; expiresAt?: string; taint?: AuditTaint },
+): Promise<CallToolResult> {
+  const expiresAt = pre.expiresAt ?? new Date(Date.now() + 120_000).toISOString();
+  const pending = await appendQuiet(deps.audit, {
+    ...base,
+    decision: "approve_pending",
+    ...(pre.ruleId !== undefined ? { ruleId: pre.ruleId } : {}),
+    ...(pre.reason !== undefined ? { reason: pre.reason } : {}),
+    ...(pre.taint !== undefined ? { taint: pre.taint } : {}),
+    expiresAt,
+  });
+  if (!pending.ok) {
+    return textError(`audit log write failed; call denied (${pending.error})`);
+  }
+  const why = pre.reason ?? "Approval is required.";
+  const reason = `${why} ${APPROVAL_UNAVAILABLE}`;
+  const decision = await appendQuiet(deps.audit, {
+    ...base,
+    decision: "deny",
+    ...(pre.ruleId !== undefined ? { ruleId: pre.ruleId } : {}),
+    reason,
+    ...(pre.taint !== undefined ? { taint: pre.taint } : {}),
+    approval: { pendingId: pending.event.id },
+  });
+  if (!decision.ok) {
+    return textError(`audit log write failed; call denied (${decision.error})`);
+  }
+  return textError(reason);
 }
 
 async function deny(
@@ -278,6 +341,7 @@ function eventBase(
     decision: NewAuditEvent["decision"];
     ruleId?: string;
     reason?: string;
+    taint?: AuditTaint;
   },
 ): NewAuditEvent {
   return {
@@ -291,14 +355,20 @@ function eventBase(
     decision: fields.decision,
     ...(fields.ruleId !== undefined ? { ruleId: fields.ruleId } : {}),
     ...(fields.reason !== undefined ? { reason: fields.reason } : {}),
-    taint: UNTAINTED_SESSION,
+    taint: fields.taint ?? deps.policy.sessionTaint?.() ?? UNTAINTED_SESSION,
   };
 }
 
 async function safePreCall(
   policy: PolicyEngine,
   input: Parameters<PolicyEngine["preCall"]>[0],
-): Promise<{ decision: NewAuditEvent["decision"]; ruleId?: string; reason?: string }> {
+): Promise<{
+  decision: PolicyCallDecision;
+  ruleId?: string;
+  reason?: string;
+  taint?: AuditTaint;
+  expiresAt?: string;
+}> {
   try {
     return await policy.preCall(input);
   } catch (error) {
@@ -310,18 +380,18 @@ async function safePreCall(
   }
 }
 
-async function appendOrThrow(audit: AuditSink, event: NewAuditEvent): Promise<void> {
+async function appendOrThrow(audit: AuditSink, event: NewAuditEvent): Promise<AuditEvent> {
   const recorded = await appendQuiet(audit, event);
   if (!recorded.ok) throw new Error(`audit log write failed; request denied (${recorded.error})`);
+  return recorded.event;
 }
 
 async function appendQuiet(
   audit: AuditSink,
   event: NewAuditEvent,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; event: AuditEvent } | { ok: false; error: string }> {
   try {
-    await audit.append(event);
-    return { ok: true };
+    return { ok: true, event: await audit.append(event) };
   } catch (error) {
     return { ok: false, error: message(error) };
   }

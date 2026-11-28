@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig, verifyAuditJsonl } from "@drawbridge/core";
+import { pinUpstreams } from "./pin.js";
 import { serveConfig } from "./serve.js";
 
 const HELP = `Drawbridge — MCP security gateway
@@ -10,15 +11,23 @@ const HELP = `Drawbridge — MCP security gateway
 Usage:
   drawbridge serve --config <file>
   drawbridge audit verify [--log <file>] [--config <file>]
+  drawbridge pin --config <file>
+  drawbridge pin update --config <file>
 
 serve
   Stdio MCP server for 2026-07-28 clients. Connects to the upstreams in the
   config and forwards tools/list and tools/call under <upstream>__<tool> names.
+  Tool rules, argument checks, rate limits, flows, and pins are enforced.
 
 audit verify
   Recompute the hash chain in the JSONL audit log. Exits 0 when every event
   links to the previous hash, and 1 when a line was altered, reordered, or
   truncated out of the middle of the chain.
+
+pin
+  Connect to the configured upstreams and write definition hashes to pins.path.
+  \`pin update\` replaces an existing pin file. A later definition change is
+  denied, or held, according to onPinMismatch.
 `;
 
 async function main(): Promise<void> {
@@ -42,6 +51,18 @@ async function main(): Promise<void> {
     if (command === "serve") {
       const config = await readConfig(required(values.config, "serve requires --config <file>"));
       await serveConfig(config);
+      return;
+    }
+    if (command === "pin") {
+      const configPath = required(values.config, "pin requires --config <file>");
+      const config = await readConfig(configPath);
+      const update = positionals[1] === "update";
+      if (positionals[1] !== undefined && !update) {
+        throw new Error(`Unknown pin command "${positionals[1]}". Use \`drawbridge pin update\`.`);
+      }
+      const pinPath = resolve(config.pins.path);
+      const count = await pinUpstreams(config, pinPath, update);
+      process.stdout.write(`${update ? "updated" : "pinned"} ${count} tool${count === 1 ? "" : "s"} in ${pinPath}\n`);
       return;
     }
     if (command === "audit" && positionals[1] === "verify") {
