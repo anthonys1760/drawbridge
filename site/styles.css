@@ -43,13 +43,22 @@ html, body {
 
 body { min-height: 100dvh; }
 
-:focus { outline: none; }
-:focus-visible { box-shadow: var(--db-focus); }
+:focus-visible {
+  outline: var(--db-focus-width, 2px) solid var(--db-focus);
+  outline-offset: var(--db-focus-offset, 2px);
+}
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid CanvasText; box-shadow: none; }
+}
 
 img, svg { display: block; max-width: 100%; }
 .mark-light { display: none; }
 html[data-theme="light"] .mark-dark { display: none; }
 html[data-theme="light"] .mark-light { display: block; }
+@media (prefers-color-scheme: light) {
+  html:not([data-theme="dark"]):not([data-theme="light"]) .mark-dark { display: none; }
+  html:not([data-theme="dark"]):not([data-theme="light"]) .mark-light { display: block; }
+}
 
 a { color: var(--db-accent); text-decoration: none; }
 a:hover { color: var(--db-accent-hover); }

@@ -83,8 +83,8 @@ button:disabled { cursor: default; opacity: 0.55; }
 }
 .file input:focus { outline: none; }
 .file:focus-within {
-  outline: none;
-  box-shadow: var(--db-focus);
+  outline: var(--db-focus-width, 2px) solid var(--db-focus);
+  outline-offset: var(--db-focus-offset, 2px);
 }
 
 .topbar {
@@ -196,7 +196,10 @@ th {
   text-transform: uppercase;
 }
 tbody tr { cursor: pointer; }
-tbody tr:focus-visible { outline: none; box-shadow: var(--db-focus); }
+tbody tr:focus-visible {
+  outline: var(--db-focus-width, 2px) solid var(--db-focus);
+  outline-offset: var(--db-focus-offset, 2px);
+}
 tbody tr[aria-current="true"] {
   background: var(--db-surface-hover);
   box-shadow: inset 2px 0 0 var(--db-accent);
@@ -276,10 +279,13 @@ pre {
   max-width: 28ch;
 }
 
-:focus { outline: none; }
 :focus-visible {
-  outline: none;
-  box-shadow: var(--db-focus);
+  outline: var(--db-focus-width, 2px) solid var(--db-focus);
+  outline-offset: var(--db-focus-offset, 2px);
+}
+@media (forced-colors: active) {
+  :focus-visible,
+  .file:focus-within { outline: 2px solid CanvasText; box-shadow: none; }
 }
 
 @media (min-width: 1024px) {

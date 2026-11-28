@@ -319,16 +319,18 @@ export function App() {
           <span class="pill">Gateway running</span>
         )}
         <div class="top-actions">
-        <details class="more">
-          <summary class="ghost">Menu</summary>
-          <button class="ghost" type="button" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
-            {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System"}
-          </button>
-          <button class="ghost" type="button" onClick={openShortcuts}>Shortcuts</button>
-          <button class="ghost" type="button" onClick={() => pauseRef.current?.showModal()} disabled={offline}>
-            Pause all calls
-          </button>
-        </details>
+          <details class="more">
+            <summary class="ghost">Menu</summary>
+          </details>
+          <div class="more-actions">
+            <button class="ghost" type="button" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
+              {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System"}
+            </button>
+            <button class="ghost" type="button" onClick={openShortcuts}>Shortcuts</button>
+            <button class="ghost" type="button" onClick={() => pauseRef.current?.showModal()} disabled={offline}>
+              Pause all calls
+            </button>
+          </div>
         </div>
       </header>
       <div class={mobileDetail ? "body detail-open" : "body"}>
