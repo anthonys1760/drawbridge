@@ -94,6 +94,44 @@ upstreams:
       secretRef: keychain:mail-token
 `),
     ).toThrow(/secretRef/);
+    const referenced = loadConfig(
+      `
+version: 1
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
+    secrets:
+      NOTES_TOKEN: env:NOTES_TOKEN
+  remote:
+    transport: http
+    url: http://127.0.0.1:9/mcp
+    secrets:
+      Authorization: file:/tmp/remote-token
+`,
+      {},
+    );
+    const notes = referenced.upstreams.find((entry) => entry.name === "notes")?.upstream;
+    const remote = referenced.upstreams.find((entry) => entry.name === "remote")?.upstream;
+    expect(notes?.secrets).toEqual({ NOTES_TOKEN: "env:NOTES_TOKEN" });
+    expect(remote?.secrets).toEqual({ Authorization: "file:/tmp/remote-token" });
+    expect(JSON.stringify(referenced)).not.toContain("literal-secret");
+    let refused = "";
+    try {
+      loadConfig(`
+version: 1
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
+    secrets:
+      TOKEN: literal-secret-value-should-not-appear
+`);
+    } catch (error) {
+      refused = error instanceof Error ? error.message : String(error);
+    }
+    expect(refused).toMatch(/env:NAME or file:PATH/);
+    expect(refused).not.toContain("literal-secret-value-should-not-appear");
     expect(() =>
       loadConfig(`
 version: 1

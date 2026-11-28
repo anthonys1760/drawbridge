@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainSteps, countdownLabel, defaultSelection, renderArgs, timeoutAnnouncements } from "../src/view.ts";
+import { chainSteps, countdownLabel, crossedMarks, defaultSelection, renderArgs, timeoutAnnouncements } from "../src/view.ts";
 
 const address = "q•••@outside-sample.example";
 
@@ -42,6 +42,14 @@ describe("dashboard view", () => {
     expect(steps[0]).toBe("Untrusted read · notes__read");
     expect(steps[1]).toBe("Scanner · instruction-override, role-hijack");
     expect(steps.join(" ")).not.toContain("exfil");
+  });
+
+  it("announces a threshold when the countdown crosses it, including a skipped second", () => {
+    expect(crossedMarks(undefined, 60)).toEqual([]);
+    expect(crossedMarks(61, 60)).toEqual([60]);
+    expect(crossedMarks(61, 59)).toEqual([60]);
+    expect(crossedMarks(20, 19)).toEqual([]);
+    expect(crossedMarks(31, 9)).toEqual([30, 10]);
   });
 
   it("announces a timeout once, naming the tool", () => {

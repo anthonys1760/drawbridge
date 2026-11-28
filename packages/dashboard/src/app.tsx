@@ -3,6 +3,7 @@ import { scale } from "../../../docs/design/tokens";
 import {
   chainSteps,
   countdownLabel,
+  crossedMarks,
   defaultSelection,
   hitNote,
   noteId,
@@ -76,6 +77,7 @@ export function App() {
   const helpRef = useRef<HTMLDialogElement>(null);
   const armedTimer = useRef<number | undefined>(undefined);
   const liveTimer = useRef<number | undefined>(undefined);
+  const prevLeft = useRef(new Map<string, number>());
   const sayRef = useRef<(message: string) => void>(() => undefined);
 
   sayRef.current = (message: string) => {
@@ -170,12 +172,13 @@ export function App() {
   useEffect(() => {
     if (!current?.expiresAt || !current.tool || recentDecision) return;
     const left = secondsLeft(current.expiresAt, gatewayNow);
-    for (const mark of [60, 30, 10]) {
+    const previous = prevLeft.current.get(current.id);
+    prevLeft.current.set(current.id, left);
+    for (const mark of crossedMarks(previous, left)) {
       const key = `${current.id}:${mark}`;
-      if (left === mark && !announced.current.has(key)) {
-        announced.current.add(key);
-        sayRef.current(`${current.tool} auto-deny in ${mark} seconds`);
-      }
+      if (announced.current.has(key)) continue;
+      announced.current.add(key);
+      sayRef.current(`${current.tool} auto-deny in ${mark} seconds`);
     }
   });
 
@@ -371,9 +374,9 @@ export function App() {
           ) : null}
         </section>
         <section class="pane detail" id="call-detail" tabIndex={-1}>
-          <div class="tabs">
-            <button type="button" class="ghost" onClick={() => setTab("call")}>Call</button>
-            <button type="button" class="ghost" onClick={() => setTab("history")}>Session history</button>
+          <div class="tabs" role="tablist" aria-label="Call detail">
+            <button type="button" role="tab" class="ghost" aria-selected={tab === "call"} aria-controls="call-detail" onClick={() => setTab("call")}>Call</button>
+            <button type="button" role="tab" class="ghost" aria-selected={tab === "history"} aria-controls="session-history" onClick={() => setTab("history")}>Session history</button>
           </div>
           {tab === "history" ? <History events={state?.recent ?? []} current={current?.id} embedded /> : null}
           {tab === "call" && !current ? (

@@ -30,6 +30,8 @@ export interface ApprovalResolution {
   channel?: ApprovalChannel;
   by?: string;
   eventId?: string;
+  /** Set when the kill switch denies a held call. */
+  cause?: "pause";
 }
 
 interface Slot {
@@ -45,6 +47,24 @@ interface Slot {
 
 export function approvalStatePath(auditPath: string): string {
   return join(dirname(auditPath), "drawbridge-approvals.json");
+}
+
+export function pauseStatePath(auditPath: string): string {
+  return join(dirname(auditPath), "drawbridge-pause.json");
+}
+
+export async function readPaused(auditPath: string): Promise<boolean> {
+  try {
+    const text = await readFile(pauseStatePath(auditPath), "utf8");
+    const parsed = JSON.parse(text) as { paused?: unknown };
+    return parsed.paused === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function writePaused(auditPath: string, paused: boolean): Promise<void> {
+  await writeFile(pauseStatePath(auditPath), `${JSON.stringify({ paused })}\n`, { mode: 0o600 });
 }
 
 export class ApprovalHub {
@@ -175,6 +195,7 @@ export async function startApprovalServer(options: {
   sessionId: string;
   channels: ApprovalChannel[];
   timeoutSeconds?: number;
+  onPauseChange?: (paused: boolean, channel: ApprovalChannel) => Promise<void>;
 }): Promise<ApprovalServer> {
   const dashboardDir = resolve(fileURLToPath(new URL("../../dashboard/dist", import.meta.url)));
   const fontsDir = resolve(fileURLToPath(new URL("../../../site/fonts", import.meta.url)));
@@ -224,6 +245,7 @@ async function handle(
     sessionId: string;
     channels: ApprovalChannel[];
     timeoutSeconds?: number;
+    onPauseChange?: (paused: boolean, channel: ApprovalChannel) => Promise<void>;
     dashboardDir: string;
     fontsDir: string;
   },
@@ -295,6 +317,7 @@ async function api(
     sessionId: string;
     channels: ApprovalChannel[];
     timeoutSeconds?: number;
+    onPauseChange?: (paused: boolean, channel: ApprovalChannel) => Promise<void>;
   },
 ): Promise<void> {
   if (url.pathname === "/api/state" && req.method === "GET") {
@@ -315,8 +338,23 @@ async function api(
   }
   if (url.pathname === "/api/pause" && req.method === "POST") {
     const body = await readBody(req);
-    const paused = Boolean(body && typeof body === "object" && (body as { paused?: unknown }).paused === true);
+    const record = body && typeof body === "object" ? (body as { paused?: unknown; channel?: unknown }) : {};
+    const paused = record.paused === true;
+    const bearer = typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("Bearer ");
+    const channel: ApprovalChannel = bearer && record.channel === "cli" ? "cli" : "dashboard";
+    try {
+      await writePaused(options.auditPath, paused);
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     options.hub.paused = paused;
+    if (paused) {
+      for (const call of options.hub.list()) {
+        await options.hub.decide(call.id, { action: "deny", channel, by: "pause", cause: "pause" });
+      }
+    }
+    await options.onPauseChange?.(paused, channel);
     sendJson(res, 200, { paused });
     return;
   }

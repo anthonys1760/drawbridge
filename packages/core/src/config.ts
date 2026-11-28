@@ -2,6 +2,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { ConfigError } from "./errors.js";
 import { assertUpstreamName } from "./namespace.js";
+import { assertSecretRef } from "./secrets.js";
 
 const actionSchema = z.enum(["allow", "deny", "approve"]);
 
@@ -81,6 +82,11 @@ const upstreamSecurity = {
   pinTools: z.boolean().optional().default(false),
   /** A changed or missing pin is denied, or held (`approve`) until a person resolves it. */
   onPinMismatch: z.enum(["deny", "approve"]).optional().default("deny"),
+  /**
+   * Credentials for this upstream only. Values are `env:NAME` or `file:PATH`
+   * references. The secret itself is not written in the config.
+   */
+  secrets: z.record(z.string(), z.string()).optional(),
 };
 
 const stdioUpstream = z.strictObject({
@@ -163,6 +169,10 @@ export function loadConfig(text: string, env: NodeJS.ProcessEnv = process.env): 
       assertUpstreamName(name);
     } catch (error) {
       throw new ConfigError(error instanceof Error ? error.message : String(error));
+    }
+    const upstream = parsed.data.upstreams[name];
+    for (const [key, value] of Object.entries(upstream?.secrets ?? {})) {
+      assertSecretRef(name, key, value);
     }
   }
 

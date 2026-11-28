@@ -1,7 +1,7 @@
 # Drawbridge example policy.
 # mail__send is allow with no allowDomains. The tainted-session flow holds
 # that send for one approval. The scanner wraps hits. notes__read of
-# q4-notes returns the sample fixture. secretRef is still refused.
+# q4-notes returns the sample fixture. Credentials use env: or file: refs.
 version: 1
 
 audit:
@@ -39,15 +39,15 @@ upstreams:
     trusted: true
     pinTools: false
 
-  # Streamable HTTP upstream. Values like ${REMOTE_MCP_TOKEN} are read from
-  # the gateway process environment. The MCP client's own credentials are
-  # never forwarded. Uncomment and point url at a running server:
+  # Streamable HTTP upstream. The secret is an env: or file: reference, and
+  # it is sent only on this upstream's requests. The MCP client's own
+  # credentials are never forwarded. Uncomment and point url at a running server:
   #
   # remote:
   #   transport: http
   #   url: http://127.0.0.1:3000/mcp
-  #   headers:
-  #     Authorization: ${REMOTE_MCP_TOKEN}
+  #   secrets:
+  #     Authorization: env:REMOTE_MCP_TOKEN
 
 rules:
   - tool: notes__read

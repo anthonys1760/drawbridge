@@ -64,6 +64,12 @@ An `approve` decision is not forwarded until a person answers. The gateway write
 
 A pending call's later human decision (`approved`, `denied_by_human`, or `timeout`) also sets `approval.pendingId`. Approvals are once-only: resolving a pending id does not allow the next identical call.
 
+## Credentials and the kill switch
+
+Client arguments whose keys look like credentials (`token`, `authorization`, `api_key`, and the same family) are removed before the upstream is called. The audit line keeps the key as `[REDACTED]` and says `Stripped client credentials at <path>`. The value is not stored. `argsHash` covers the arguments the client sent; the hash is not the secret.
+
+`drawbridge pause` writes a `deny` line with `ruleId: kill:paused` and `tool: pause`, then denies each held call with `All calls paused, so Drawbridge denied it`. `drawbridge resume` writes `ruleId: kill:resumed`. A new `tools/call` while paused is one `deny` line, `ruleId: kill:paused`, reason `All calls paused`, and is not forwarded. The choice also lives in `drawbridge-pause.json` beside the audit log.
+
 ## Scanner hits
 
 `hits[].path` is a bracket/dot path:

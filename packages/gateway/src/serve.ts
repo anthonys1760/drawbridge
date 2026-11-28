@@ -1,15 +1,19 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   JsonlAuditLog,
+  UNTAINTED_SESSION,
   YamlPolicy,
   loadPinFile,
+  sha256,
+  stableStringify,
   ulid,
   type DrawbridgeConfig,
   type PolicyEngine,
 } from "@drawbridge/core";
-import { ApprovalHub, startApprovalServer } from "./approvals.js";
+import { ApprovalHub, readPaused, startApprovalServer } from "./approvals.js";
 import { createGatewayServer } from "./server.js";
-import { SdkUpstreamPool, type UpstreamPool } from "./upstreams.js";
+import { openUpstreamPool, type UpstreamPool } from "./upstreams.js";
+import { VERSION } from "./version.js";
 
 export interface ServeOptions {
   policy?: PolicyEngine;
@@ -30,12 +34,28 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
     : undefined;
   const policy = options.policy ?? new YamlPolicy(config, pins ? { pins } : {});
   const approvals = new ApprovalHub();
+  approvals.paused = await readPaused(config.audit.path);
   const approvalServer = await startApprovalServer({
     hub: approvals,
     auditPath: config.audit.path,
     sessionId,
     channels: config.approval.channels,
     timeoutSeconds: config.approval.timeoutSeconds,
+    onPauseChange: async (paused) => {
+      await audit.append({
+        sessionId,
+        client: { name: "drawbridge", version: VERSION },
+        upstream: "_gateway",
+        method: "tools/call",
+        tool: paused ? "pause" : "resume",
+        argsRedacted: {},
+        argsHash: sha256(stableStringify({})),
+        decision: paused ? "deny" : "allow",
+        ruleId: paused ? "kill:paused" : "kill:resumed",
+        reason: paused ? "All calls paused" : "Calls resumed",
+        taint: policy.sessionTaint?.() ?? UNTAINTED_SESSION,
+      });
+    },
   });
   let pool: UpstreamPool | undefined;
   let closed = false;
@@ -48,8 +68,8 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
 
   void ready.catch(() => undefined);
 
-  const connecting = SdkUpstreamPool.connect(config.upstreams)
-    .then((created) => {
+  const connecting = openUpstreamPool(config)
+    .then(({ pool: created }) => {
       if (closed) {
         return created.close().then(() => {
           throw new Error("Drawbridge shut down before upstreams were ready");

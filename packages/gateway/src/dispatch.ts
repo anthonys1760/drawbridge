@@ -5,8 +5,10 @@ import {
   isOutboundTool,
   namespaceTool,
   parseNamespacedTool,
+  credentialNote,
   redact,
   sha256,
+  stripClientCredentials,
   stableStringify,
   taintAfterIfChanged,
   type AuditEvent,
@@ -173,6 +175,9 @@ export async function handleToolCall(
   input: { name: string; args: Record<string, unknown>; client: PolicyClient },
   ctx: ToolCallContext = {},
 ): Promise<CallToolResult> {
+  const stripped = stripClientCredentials(input.args);
+  const note = credentialNote(stripped.paths);
+  const forward = { ...input, args: stripped.args };
   if (deps.approvals.paused) {
     return deny(deps, {
       client: input.client,
@@ -182,6 +187,7 @@ export async function handleToolCall(
       decision: "deny",
       ruleId: "kill:paused",
       reason: "All calls paused",
+      ...(note ? { credentialNote: note } : {}),
     });
   }
   let pool: UpstreamPool;
@@ -196,6 +202,7 @@ export async function handleToolCall(
       decision: "deny",
       ruleId: "upstream:unavailable",
       reason: `upstreams unavailable: ${message(error)}`,
+      ...(note ? { credentialNote: note } : {}),
     });
   }
 
@@ -209,12 +216,13 @@ export async function handleToolCall(
       decision: "deny",
       ruleId: "router:unknown-tool",
       reason: `Unknown tool "${input.name}". Tools are named <upstream>__<tool>.`,
+      ...(note ? { credentialNote: note } : {}),
     });
   }
 
   const echoed = deps.approvals.verify(ctx.approvalState);
   if (echoed) {
-    return resumeApproval(deps, pool, echoed, routed, input, ctx);
+    return resumeApproval(deps, pool, echoed, routed, forward, ctx);
   }
 
   let catalog: "ready" | "unavailable" = "ready";
@@ -230,7 +238,7 @@ export async function handleToolCall(
     method: "tools/call",
     upstream: routed.upstream,
     tool: input.name,
-    args: input.args,
+    args: forward.args,
     client: input.client,
     trusted: pool.trusted(routed.upstream),
     annotations: definition?.annotations ?? pool.annotations(routed.upstream, routed.tool),
@@ -246,9 +254,10 @@ export async function handleToolCall(
     ruleId: pre.ruleId,
     reason: pre.reason,
     taint: pre.taint,
+    ...(note ? { credentialNote: note } : {}),
   };
   if (pre.decision === "approve") {
-    return holdForApproval(deps, pool, eventBase(deps, { ...baseFields, decision: "approve_pending" }), pre, input, ctx);
+    return holdForApproval(deps, pool, eventBase(deps, { ...baseFields, decision: "approve_pending" }), pre, forward, ctx);
   }
   const base = eventBase(deps, { ...baseFields, decision: pre.decision });
   if (!decisionForwards(pre.decision)) {
@@ -267,7 +276,7 @@ export async function handleToolCall(
   const started = Date.now();
   let result: CallToolResult;
   try {
-    result = await pool.callTool(routed.upstream, routed.tool, input.args);
+    result = await pool.callTool(routed.upstream, routed.tool, forward.args);
   } catch (error) {
     result = textError(`upstream "${routed.upstream}" error: ${message(error)}`);
   }
@@ -346,7 +355,7 @@ async function holdForApproval(
     return elicitAgain(deps, view, pre.reason);
   }
   const resolution = await deps.approvals.wait(view.id);
-  if (resolution.action !== "approve") return textError(BLOCKED);
+  if (resolution.action !== "approve") return textError(resolution.cause === "pause" ? "All calls paused" : BLOCKED);
   if (!deps.approvals.claim(view.id)) return textError(BLOCKED);
   return forwardApproved(deps, pool, base, resolution.eventId ?? view.id, input);
 }
@@ -374,7 +383,7 @@ async function resumeApproval(
     }
   }
   if (!resolution) return elicitAgain(deps, view, view.reason);
-  if (resolution.action !== "approve") return textError(BLOCKED);
+  if (resolution.action !== "approve") return textError(resolution.cause === "pause" ? "All calls paused" : BLOCKED);
   if (!deps.approvals.claim(id)) return textError(BLOCKED);
   const base = eventBase(deps, {
     client: input.client,
@@ -422,7 +431,12 @@ async function commitDecision(
   deps: GatewayDeps,
   base: NewAuditEvent,
   pending: AuditEvent,
-  resolution: { action: "approve" | "deny" | "timeout"; channel?: "elicitation" | "dashboard" | "cli"; by?: string },
+  resolution: {
+    action: "approve" | "deny" | "timeout";
+    channel?: "elicitation" | "dashboard" | "cli";
+    by?: string;
+    cause?: "pause";
+  },
 ): Promise<string | undefined> {
   const decision = resolution.action === "approve" ? "approved" : resolution.action === "deny" ? "denied_by_human" : "timeout";
   const reason =
@@ -430,11 +444,13 @@ async function commitDecision(
       ? "Approved once"
       : decision === "timeout"
         ? "Timed out, so Drawbridge denied it"
-        : resolution.channel === "cli"
-          ? "Denied from the CLI"
-          : resolution.channel === "elicitation"
-            ? "Denied in the client"
-            : "Denied by you on the dashboard";
+        : resolution.cause === "pause"
+      ? "All calls paused, so Drawbridge denied it"
+      : resolution.channel === "cli"
+        ? "Denied from the CLI"
+        : resolution.channel === "elicitation"
+          ? "Denied in the client"
+          : "Denied by you on the dashboard";
   const latencyMs = Math.max(0, Date.now() - Date.parse(pending.ts));
   const written = await appendQuiet(deps.audit, {
     ...base,
@@ -530,6 +546,7 @@ async function deny(
     decision: NewAuditEvent["decision"];
     ruleId?: string;
     reason?: string;
+    credentialNote?: string;
   },
 ): Promise<CallToolResult> {
   const recorded = await appendQuiet(
@@ -553,9 +570,11 @@ function eventBase(
     decision: NewAuditEvent["decision"];
     ruleId?: string;
     reason?: string;
+    credentialNote?: string;
     taint?: AuditTaint;
   },
 ): NewAuditEvent {
+  const reason = joinReason(fields.reason, fields.credentialNote);
   return {
     sessionId: deps.sessionId,
     client: fields.client,
@@ -566,9 +585,14 @@ function eventBase(
     argsHash: sha256(stableStringify(fields.args)),
     decision: fields.decision,
     ...(fields.ruleId !== undefined ? { ruleId: fields.ruleId } : {}),
-    ...(fields.reason !== undefined ? { reason: fields.reason } : {}),
+    ...(reason !== undefined ? { reason } : {}),
     taint: fields.taint ?? deps.policy.sessionTaint?.() ?? UNTAINTED_SESSION,
   };
+}
+
+function joinReason(reason: string | undefined, note: string | undefined): string | undefined {
+  if (!note) return reason;
+  return reason ? `${reason}. ${note}` : note;
 }
 
 async function safePreCall(

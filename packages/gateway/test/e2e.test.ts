@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server as HttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,7 +102,8 @@ upstreams:
     });
     expect(text(echoed)).toContain("hello");
     expect(text(echoed)).toContain(EMAIL);
-    expect(text(echoed)).toContain(SECRET);
+    expect(text(echoed)).not.toContain(SECRET);
+    expect(text(echoed)).toContain('"token":null');
 
     const note = await client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
     expect(text(note)).toBe("note:notes/a.md");
@@ -558,6 +559,133 @@ upstreams:
     expect(events.filter((event) => event.decision === "approve_pending")).toHaveLength(2);
     expect(events.some((event) => event.decision === "approved" && event.approval?.channel === "cli")).toBe(true);
     expect(events.some((event) => event.decision === "approved" && event.approval?.channel === "dashboard")).toBe(true);
+  }, 45_000);
+
+  it("keeps seeded secrets out of the audit log, dashboard, errors, and stderr", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-secrets-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    const secretPath = join(dir, "mail-token");
+    const fileSecret = "seed-file-secret-cccc";
+    const envSecret = "seed-env-secret-dddd";
+    const argSecret = "seed-arg-secret-eeee";
+    await writeFile(secretPath, `${fileSecret}\n`);
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+rules:
+  - tool: notes__echo
+    action: allow
+  - tool: notes__read
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    secrets:
+      NOTES_TOKEN: env:NOTES_SEED
+  mail:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}", "mail"]
+    secrets:
+      MAIL_TOKEN: file:${secretPath}
+`,
+    );
+    const gateway = await connectGateway(configPath, { NOTES_SEED: envSecret });
+    const echoed = await gateway.client.callTool({
+      name: "notes__echo",
+      arguments: { message: "hello", token: argSecret, authorization: `Bearer ${fileSecret}` },
+    });
+    expect(text(echoed)).not.toContain(argSecret);
+    expect(text(echoed)).not.toContain(fileSecret);
+    expect(text(echoed)).not.toContain(envSecret);
+    const state = await approvalRequest(auditPath, "/api/state");
+    const paused = await runCli(["pause", "--config", configPath]);
+    const missing = await runCli(["serve", "--config", join(dir, "missing.yaml")]);
+    await gateway.close();
+    const log = await readFile(auditPath, "utf8");
+    const outputs = [
+      ["tool result", text(echoed)],
+      ["audit", log],
+      ["dashboard", JSON.stringify(state)],
+      ["stderr", gateway.stderr.join("")],
+      ["pause stdout", paused.stdout],
+      ["pause stderr", paused.stderr],
+      ["error stderr", missing.stderr],
+    ] as const;
+    for (const [label, value] of outputs) {
+      expect(value, label).not.toContain(fileSecret);
+      expect(value, label).not.toContain(envSecret);
+      expect(value, label).not.toContain(argSecret);
+    }
+    expect(log).toContain("[REDACTED]");
+    expect(log).toContain("Stripped client credentials");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+  }, 45_000);
+
+  it("pauses through the CLI, denies new calls, and stays paused across a restart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-pause-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+approval:
+  timeoutSeconds: 30
+rules:
+  - tool: notes__read
+    action: allow
+  - tool: notes__echo
+    action: allow
+  - tool: mail__send
+    action: approve
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    trusted: false
+  mail:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}", "mail"]
+    trusted: true
+`,
+    );
+    const gateway = await connectGateway(configPath);
+    const held = gateway.client.callTool({ name: "mail__send", arguments: { to: "a@outsidecorp.com" } });
+    await waitForApprovalId(configPath);
+    const pause = await runCli(["pause", "--config", configPath]);
+    expect(pause.status).toBe(0);
+    expect(text(await held)).toBe("All calls paused");
+    const denied = await gateway.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(denied)).toBe("All calls paused");
+    const pauseFile = JSON.parse(await readFile(join(dir, "drawbridge-pause.json"), "utf8")) as { paused?: boolean };
+    expect(pauseFile.paused).toBe(true);
+    await gateway.close();
+
+    const restarted = await connectGateway(configPath);
+    const still = await restarted.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(still)).toBe("All calls paused");
+    const resume = await runCli(["resume", "--config", configPath]);
+    expect(resume.status).toBe(0);
+    const allowed = await restarted.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(allowed)).toBe("note:notes/a.md");
+    await restarted.close();
+
+    const log = await readFile(auditPath, "utf8");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+    expect(log).toContain("kill:paused");
+    expect(log).toContain("All calls paused, so Drawbridge denied it");
+    expect(log).toContain("kill:resumed");
   }, 45_000);
 });
 
