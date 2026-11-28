@@ -1,6 +1,8 @@
 import type { AuditDecision, AuditMethod, AuditScanner, AuditTaint } from "./audit.js";
 import type { ArgConstraint, DrawbridgeConfig, PolicyAction, PolicyRule, RateLimitConfig } from "./config.js";
 import { toolDefinitionHash, type PinFile, type ToolDefinition } from "./pins.js";
+import { collectText, exfilScanner, isOutboundTool } from "./exfil.js";
+import { redact } from "./redact.js";
 import { applyScanner } from "./scanner.js";
 
 /**
@@ -57,6 +59,11 @@ export interface PreCallDecision {
   taint?: AuditTaint;
   /** Set when `decision` is `approve`. The pending audit record stores this. */
   expiresAt?: string;
+  /**
+   * Exfiltration flags for a held outbound call. The pending line may carry
+   * them. The later human decision does not.
+   */
+  scanner?: AuditScanner;
 }
 
 /**
@@ -151,6 +158,8 @@ export interface PolicyRuntime {
  * marks the session tainted, and so does any scanner hit. `seedTaint` is for tests.
  */
 export class YamlPolicy implements PolicyEngine {
+  /** Strings from untrusted results, used to flag outbound arguments. */
+  private untrusted: string[] = [];
   private taint: AuditTaint;
   private readonly toolMinute = new Map<string, number[]>();
   private readonly toolSession = new Map<string, number>();
@@ -198,6 +207,10 @@ export class YamlPolicy implements PolicyEngine {
     });
     if ((!input.trusted && input.method === "tools/call") || scanned.scanner) {
       this.markTainted(input.upstream);
+      if (input.method === "tools/call") {
+        this.remember(input.result);
+        this.remember(scanned.result);
+      }
     }
     return {
       result: scanned.result,
@@ -273,7 +286,7 @@ export class YamlPolicy implements PolicyEngine {
       break;
     }
 
-    return this.finish(action, ruleId, reason, ruleLimit, tool);
+    return this.finish(action, ruleId, reason, ruleLimit, tool, input.args);
   }
 
   private finish(
@@ -282,6 +295,7 @@ export class YamlPolicy implements PolicyEngine {
     reason: string,
     ruleLimit: RateLimitConfig | undefined,
     tool?: string,
+    args?: unknown,
   ): PreCallDecision {
     if (action === "deny") {
       return { decision: "deny", ruleId, reason, taint: this.taint };
@@ -300,9 +314,28 @@ export class YamlPolicy implements PolicyEngine {
     }
     if (action === "approve") {
       const expiresAt = new Date(this.now() + this.config.approval.timeoutSeconds * 1000).toISOString();
-      return { decision: "approve", ruleId, reason, taint: this.taint, expiresAt };
+      const scanner =
+        tool !== undefined && isOutboundTool(tool) && this.taint.tainted
+          ? exfilScanner(args, redact(args), this.untrusted)
+          : undefined;
+      return {
+        decision: "approve",
+        ruleId,
+        reason,
+        taint: this.taint,
+        expiresAt,
+        ...(scanner ? { scanner } : {}),
+      };
     }
     return { decision: "allow", ruleId, reason, taint: this.taint };
+  }
+
+  private remember(value: unknown): void {
+    for (const text of collectText(value)) {
+      if (this.untrusted.includes(text)) continue;
+      this.untrusted.push(text);
+      if (this.untrusted.length > 40) this.untrusted.shift();
+    }
   }
 
   private consume(tool: string, ruleLimit: RateLimitConfig | undefined): { ok: true } | { ok: false; scope: "tool" | "session" } {
