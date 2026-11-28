@@ -1,5 +1,7 @@
 # Drawbridge
 
+<!-- TODO: Add the README hero. brand/readme-hero.png is not in this repo, and there is no brand wordmark SVG to use instead. -->
+
 Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawbridge connects to the upstream MCP servers you list, shows one namespaced tool catalog (`notes__read`), checks the call, and writes a hash-chained audit log before it forwards.
 
 A confused note can tell the agent to send the keys. Drawbridge wraps that text, taints the session, and holds the send until a person decides. The decision and the hash chain are what you can show later.

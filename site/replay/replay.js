@@ -48,6 +48,8 @@ const inspectorEl = document.querySelector("#inspector");
 const chaptersEl = document.querySelector("#chapters");
 const noteEl = document.querySelector("#sample-note");
 const playEl = document.querySelector("#play");
+const prevEl = document.querySelector("#prev");
+const nextEl = document.querySelector("#next");
 const speedEl = document.querySelector("#speed");
 const themeEl = document.querySelector("#theme");
 
@@ -75,6 +77,8 @@ document.querySelector("#file").addEventListener("change", (event) => {
   reader.readAsText(file);
 });
 playEl.addEventListener("click", () => setPlaying(!state.playing));
+prevEl.addEventListener("click", () => step(-1));
+nextEl.addEventListener("click", () => step(1));
 speedEl.addEventListener("click", () => {
   state.speed = state.speed === 1 ? 2 : 1;
   speedEl.textContent = `${state.speed}×`;
@@ -93,8 +97,7 @@ themeEl.addEventListener("click", () => {
 themeEl.textContent = document.documentElement.getAttribute("data-theme") === "light" ? "Dark" : "Light";
 
 window.addEventListener("keydown", (event) => {
-  const tag = event.target instanceof Element ? event.target.tagName : "";
-  if (tag === "INPUT" || tag === "TEXTAREA") return;
+  if (ignoresShortcuts(event.target)) return;
   if (event.key === "ArrowRight") {
     event.preventDefault();
     select(state.selected + 1, false);
@@ -116,6 +119,13 @@ window.addEventListener("keydown", (event) => {
     void verify(state.text);
   }
 });
+
+function ignoresShortcuts(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest("input, select, textarea, button")) return true;
+  const editable = target.closest("[contenteditable]");
+  return Boolean(editable && editable.getAttribute("contenteditable") !== "false");
+}
 
 function parseLog(text) {
   const lines = text.split("\n");
@@ -147,9 +157,21 @@ function select(index, chain) {
   state.selected = Math.min(last, Math.max(0, index));
   state.chainFocus = chain;
   render();
+  if (chain) {
+    chainEl.scrollIntoView({ block: "start" });
+    chainEl.focus({ preventScroll: true });
+    return;
+  }
+  // Below 1024px the table is not its own scroller. Scrolling the row into view
+  // moves the window and hides the chain bar and playback controls.
+  if (window.matchMedia("(max-width: 1023px)").matches) return;
   const row = rowsEl.querySelector('[aria-current="true"]');
   row?.scrollIntoView({ block: "nearest" });
-  if (chain) chainEl.focus();
+}
+
+function step(delta) {
+  setPlaying(false);
+  select(state.selected + delta, false);
 }
 
 function jumpChapter(index) {
@@ -209,6 +231,8 @@ function chainMark(index) {
 
 function render() {
   noteEl.textContent = `Sample session for the demo. Each row is one AuditEvent from ${state.name}.`;
+  prevEl.disabled = state.selected <= 0;
+  nextEl.disabled = state.events.length === 0 || state.selected >= state.events.length - 1;
   const currentChapter = chapterIndex();
   for (const button of chaptersEl.querySelectorAll("[role=tab]")) {
     button.setAttribute("aria-selected", button.dataset.chapter === String(currentChapter) ? "true" : "false");
@@ -258,15 +282,19 @@ function renderChain() {
 
 function renderRows() {
   const verification = state.verification;
+  const focusInRows = rowsEl.contains(document.activeElement);
   rowsEl.replaceChildren(
     ...state.events.map((event, index) => {
       const row = document.createElement("tr");
+      const name = event.tool || event.method || "unreadable";
+      row.tabIndex = index === state.selected ? 0 : -1;
       if (index === state.selected) row.setAttribute("aria-current", "true");
+      row.setAttribute("aria-label", `Entry ${index + 1}, ${name}, ${decisionLabel(event.decision)}`);
       const broken = verification.status === "broken" && index + 1 >= verification.line;
       if (broken) row.classList.add("broken");
       row.append(
         cell(String(index + 1)),
-        cell(event.tool || event.method || "unreadable", `${recordKind(event)} · ${event.upstream ?? ""}`),
+        toolCell(event),
         cell(decisionLabel(event.decision), event.ruleId || ""),
         scannerCell(event),
         cell(chainMark(index), broken ? "unverified" : ""),
@@ -278,6 +306,30 @@ function renderRows() {
       return row;
     }),
   );
+  if (focusInRows) rowsEl.querySelector('[aria-current="true"]')?.focus({ preventScroll: true });
+}
+
+function toolCell(event) {
+  const node = document.createElement("td");
+  const name = String(event.tool || event.method || "unreadable");
+  const main = document.createElement("div");
+  main.className = "mono tool-name";
+  main.title = name;
+  const parts = name.split("__");
+  for (let index = 0; index < parts.length; index += 1) {
+    if (index > 0) {
+      main.append(document.createElement("wbr"));
+      main.append("__");
+      main.append(document.createElement("wbr"));
+    }
+    main.append(parts[index]);
+  }
+  node.append(main);
+  const sub = document.createElement("div");
+  sub.className = "subtle";
+  sub.textContent = `${recordKind(event)} · ${event.upstream ?? ""}`.replace(/ · $/, "");
+  node.append(sub);
+  return node;
 }
 
 function scannerCell(event) {
