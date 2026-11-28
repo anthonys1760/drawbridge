@@ -30,9 +30,21 @@ function redactValue(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Keep the domain visible and mask the local part as its first character
+ * plus three bullets. `john@outsidecorp.com` becomes `j•••@outsidecorp.com`.
+ * A one-character local part works the same way: `q@outside-sample.example`
+ * becomes `q•••@outside-sample.example`.
+ */
+export function maskEmail(address: string): string {
+  const at = address.lastIndexOf("@");
+  if (at <= 0 || at === address.length - 1) return address;
+  return `${address[0]}•••@${address.slice(at + 1)}`;
+}
+
 function redactString(value: string): string {
   return value
-    .replace(EMAIL, "[REDACTED_EMAIL]")
+    .replace(EMAIL, (address) => maskEmail(address))
     .replace(BEARER, "Bearer [REDACTED]")
     .replace(SK_KEY, "[REDACTED]");
 }

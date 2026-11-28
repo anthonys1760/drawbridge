@@ -2,7 +2,7 @@
 
 Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawbridge connects to the upstream MCP servers you list, shows one namespaced tool catalog (`notes__read`), and writes a hash-chained audit log before it forwards a call.
 
-This repository is milestone 1: a pass-through proxy with a validated config and a tamper-evident log. Allow, deny, and approval rules are hook points only. They are not enforced yet, and a config that contains them is refused so they cannot look like protection.
+This repository enforces the milestone 2 policy engine on top of the pass-through proxy: allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins. Scanning and approval channels are accepted in the config and are not enforced yet. An approve decision is written as pending and then denied until those channels exist.
 
 ## Quickstart
 
@@ -45,11 +45,33 @@ node packages/gateway/dist/cli.js audit verify --config examples/drawbridge.yaml
 version: 1
 audit:
   path: ./drawbridge-audit.jsonl
+defaults:
+  action: deny
+  fromAnnotations: true
+rules:
+  - tool: notes__read
+    action: allow
+    args:
+      path:
+        pattern: '^notes/.*\.md$'
+        maxLength: 200
+  - tool: notes__echo
+    action: allow
+  - tool: mail__send
+    action: allow
+flows:
+  - name: no-send-after-untrusted-content
+    when:
+      sessionTainted: true
+    tools: [mail__send, "*__http_post", "*__create_issue"]
+    action: approve
+    reason: Untrusted content entered this session
 upstreams:
   notes:
     transport: stdio
     command: ["node", "examples/demo-upstream/dist/index.js"]
     trusted: false
+    pinTools: false
   remote:
     transport: http
     url: http://127.0.0.1:3000/mcp
@@ -60,8 +82,24 @@ upstreams:
 - Upstream names match `[A-Za-z0-9][A-Za-z0-9_-]*` and must not contain `__`. Tool `read` on upstream `notes` is advertised as `notes__read`. A tool whose own name contains `__` still round-trips.
 - `${VAR}` is read from the gateway's environment. An unset variable refuses startup. The value is not the MCP client's credential.
 - Stdio upstreams receive a short safe environment (`PATH`, `HOME`, and the other SDK defaults) plus the keys in `env`. The rest of the gateway's environment is not copied across.
-- `trusted` is stored and passed into the policy hook. It does not change behavior in this milestone.
-- `pinTools: true`, `auth`, `secretRef`, and the policy sections `defaults`, `rules`, `flows`, `scanner`, and `approval` refuse startup. Those behaviors land in later milestones.
+- `auth` and `secretRef` still refuse startup. Per-upstream secrets are milestone 5.
+- `scanner` and `approval` are validated. `approval.timeoutSeconds` sets `expiresAt` on a pending call (default 120). Channels, `highRisk`, and the scanner are not applied yet.
+- `pinTools: true` requires `drawbridge pin --config <file>` first (default pin path `drawbridge.pins.json`). `drawbridge pin update --config <file>` rewrites it. A changed definition is denied, or held when `onPinMismatch` is `approve`.
+
+Rules are first-match-wins, in file order. For `tools/call`:
+
+1. Listing tools is always allowed and audited. Tool rules do not gate `tools/list`.
+2. If the upstream sets `pinTools`, the current definition hash is checked before rules. A missing catalog entry, a failed list, a missing pin, or a hash mismatch is final.
+3. The first matching tool glob wins. `*` is any sequence, `?` is one character, and the match is anchored. The rule id is `rule:<index>`.
+4. On an allow or approve rule, argument constraints are checked. A violation denies with that same rule id. A deny rule does not check arguments.
+5. If nothing matched, a trusted upstream with `defaults.fromAnnotations` uses `destructiveHint` as approve and otherwise `readOnlyHint` as allow. An untrusted server's annotations are ignored. A matching rule always wins over an annotation.
+6. Otherwise `defaults.action` applies (deny when the section is omitted).
+7. Flows run in file order. The first flow whose `when.sessionTainted` equals the current session and whose tool glob matches stops the scan. It can only tighten (`deny` over `approve` over `allow`). The demo leaves `mail__send` as allow with no `allowDomains`, so this flow is what holds that send once the session is tainted.
+8. Rate limits apply only to an allow or approve. `rules[].rateLimit` is per tool. `defaults.rateLimit` is the whole session. `perMinute` is a 60 second window. A hit at t=0 does not count at t=60000.
+
+Constraints are top-level argument keys (or every element of an array). `pattern` is a JavaScript regular expression. `enum` is an exact string match. `allowDomains` is the domain after the last `@`, compared case-insensitively and not as a subdomain. `maxLength` is the string length. A missing or non-string value denies. An invalid pattern refuses to load the config.
+
+Session taint starts untainted. Milestone 2 does not mark it from tool results. The normative audit rules, including email masking and scanner span indexes, are in [docs/audit-schema.md](docs/audit-schema.md).
 
 ## How a call moves
 
@@ -80,68 +118,23 @@ flowchart TD
 For `tools/call` the order is:
 
 1. Split `upstream__tool`. An unknown name is denied and audited. Nothing is forwarded.
-2. `PolicyEngine.preCall`. A throw is a deny. Only `allow` and `approved` continue. The milestone 1 engine is `AllowAllPolicy`.
+2. `PolicyEngine.preCall`. A throw is a deny. Only `allow` and `approved` continue. `approve` writes `approve_pending` (with `expiresAt`) and then a `deny` linked by `approval.pendingId`, and does not forward. The deny reason says approval channels arrive in milestone 4.
 3. Append an intent record and fsync it. If that write fails, the call is denied and not forwarded.
 4. Forward the raw arguments to that upstream. Drawbridge's own client identity is what the upstream sees.
 5. `PolicyEngine.postResult`. A throw withholds the payload.
-6. Append an outcome record with `resultHash` and `durationMs`. If that write fails, the client gets an error and not the upstream payload.
+6. Append an outcome record with `resultHash`, `durationMs`, and `intentId` set to the intent record. If that write fails, the client gets an error and not the upstream payload.
 
 `tools/list` does the same per upstream and returns one page. A failed upstream list fails the whole list, so the catalog is never silently partial. `ping` is answered locally by the SDK. Resources, prompts, and completions are not aggregated.
 
-The gateway keeps a session id (a ULID) for the process. That is the stdio client's session. Milestone 1 writes an untainted session on every record. See the audit schema for when a later milestone updates that field.
+The gateway keeps a session id (a ULID) for the process. That is the stdio client's session. Records store the session taint policy evaluated. It starts untainted.
 
 ## Audit schema
 
-The config file is `drawbridge.yaml`. Each log line is one JSON object, checked by `auditEventSchema` in `packages/core`. Fields that later milestones write (`scanner`, `approval`, `expiresAt`) are optional and are omitted until then.
+`hash = sha256(prevHash + canonicalJson)` with no separator. `canonicalJson` is the canonical JSON of the event with only `hash` removed, so `prevHash` is both the raw prefix and a field inside the JSON. The first `prevHash` is 64 zero characters. Canonical JSON has no whitespace, object keys are sorted by UTF-16 code unit, `undefined` object entries are dropped, and `undefined` array entries become `null`. Verify re-parses each line, so on-disk key order does not matter. Opening a log that fails verification refuses to start.
 
-```ts
-interface AuditEvent {
-  id: string;                 // ULID
-  ts: string;                 // ISO 8601 UTC
-  sessionId: string;
-  client: { name?: string; version?: string };
-  upstream: string;
-  method: "tools/call" | "tools/list" | "resources/read" | "prompts/get";
-  tool?: string;
-  argsRedacted: unknown;
-  argsHash: string;           // sha256 of the raw arguments
-  decision: "allow" | "deny" | "approve_pending" | "approved" | "denied_by_human" | "timeout";
-  ruleId?: string;
-  reason?: string;
-  taint: { tainted: boolean; sources: string[] }; // session state before this event
-  taintAfter?: { tainted: boolean; sources: string[] }; // only when it differs from taint
-  scanner?: {
-    verdict: "clean" | "flagged" | "wrapped" | "blocked";
-    hits: {
-      rule: string;
-      span: [number, number];
-      target: "args" | "result" | "description";
-      path: string;           // field path inside that target
-    }[];
-  };
-  approval?: {
-    channel?: "elicitation" | "dashboard" | "cli";
-    by?: string;
-    latencyMs?: number;
-    pendingId?: string;       // id of the approve_pending event this decision resolves
-  };
-  expiresAt?: string;         // ISO 8601 UTC, set on approve_pending
-  resultHash?: string;        // present on the outcome record
-  durationMs?: number;
-  prevHash: string;
-  hash: string;
-}
-```
+`audit verify` and startup both use `auditEventSchema`. Optional `taintAfter` and `intentId` are part of that schema. The field path, span indexes, email mask, and the rule that decision lines do not repeat scanner hits are specified in [docs/audit-schema.md](docs/audit-schema.md).
 
-**Hash.** `hash = sha256(prevHash + canonicalJson)`, hex-encoded, with no separator between the prefix and the JSON. `canonicalJson` is the canonical JSON of the event with the `hash` field removed. `prevHash` is that raw prefix and is also still a field inside `canonicalJson`. The first event's `prevHash` is 64 zero characters (`"0".repeat(64)`). Each later event's `prevHash` is the previous event's `hash`.
-
-Canonical JSON (`stableStringify`) has no whitespace. Object keys are sorted by UTF-16 code unit. `undefined` object entries are dropped. `undefined` array entries become `null`. Strings, numbers, booleans, and `null` use `JSON.stringify`. `audit verify` parses each line and re-canonicalizes, so key order in the file does not matter. A rewritten line, a swapped `prevHash`, or a line deleted from the middle of the chain fails verification. Opening a log that fails verification refuses to start.
-
-**Taint.** `taint` is the session state before the event, which is what policy sees. `taintAfter` is optional and is written only when this event changes that state. It is omitted when the two are equal, including the same `sources` in the same order. Replay uses `taintAfter` to show the flip on the event that introduced the untrusted content. The next event's `taint` is then that new state. `taintAfter` is part of the hashed canonical JSON, like every other field. Milestone 1 never changes session taint, so the records it writes have no `taintAfter`.
-
-**Approvals.** A pending call is an `approve_pending` record with `expiresAt`. The later decision (`approved`, `denied_by_human`, or `timeout`) sets `approval.pendingId` to that pending record's `id`, so two retries with the same arguments still pair to the right call. An approval is once-only: it resolves that pending id and does not allow the next identical call.
-
-An allowed call is two lines: intent, then outcome. A denial is one line. `argsRedacted` masks values whose keys look like secrets, plus email addresses, `Bearer` tokens, and `sk-` tokens in strings. `argsHash` covers the raw arguments, which are not stored. This is not the heuristic scanner. `scanner.verdict` of `"blocked"` is the audit value for scanner `mode: block`. Hit `target` says whether the span was in the arguments, the tool result, or a tool description, and `path` is the field path inside that value.
+Email local parts in stored arguments keep the domain: `john@outsidecorp.com` is stored as `j•••@outsidecorp.com`. Secret-shaped keys, `Bearer` tokens, and `sk-` tokens are still replaced with `[REDACTED]`.
 
 ## Repository
 
@@ -162,8 +155,8 @@ pnpm check    # build, test, typecheck, lint, secret scan
 
 | Milestone | Build |
 | --- | --- |
-| 1 (this PR) | Pass-through proxy, namespaced catalog, write-ahead audit log |
-| 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
+| 1 | Pass-through proxy, namespaced catalog, write-ahead audit log |
+| 2 (this PR) | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
 | 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
 | 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules. Approvals are once-only in v0.1 |
 | 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
@@ -178,7 +171,9 @@ Decisions for later milestones, not built here:
 
 ## Known gaps
 
-- Policy, pinning, scanning, taint, and approvals are interfaces only. `AllowAllPolicy` allows every routed tool and records `ruleId: stub:allow-all`.
+- The scanner does not run. `approve` is recorded and then denied until milestone 4. Session taint is not set from tool results until milestone 3, so the demo flow does not hold `mail__send` unless something else has tainted the session.
+- `secretRef` / `auth` still refuse startup.
+- `tools/list` is audited and is not gated by tool rules.
 - `resources/*`, `prompts/*`, and completions are not forwarded. `tools/list` is a single page; a cursor is ignored.
 - Icons and other tool fields beyond title, description, input and output schemas, and annotations are not advertised.
 - The audit store is JSONL only. The SQLite index, dashboard, and `replay` command come with the dashboard.

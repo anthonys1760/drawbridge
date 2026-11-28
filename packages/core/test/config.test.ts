@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ConfigError, loadConfig, redact } from "../src/index.js";
+import { loadConfig, redact } from "../src/index.js";
 
 const BASE = `
 version: 1
@@ -20,6 +20,12 @@ describe("loadConfig", () => {
     const config = loadConfig(await readFile(join(root, "examples/drawbridge.yaml"), "utf8"));
     expect(config.upstreams.map((entry) => entry.name)).toEqual(["notes"]);
     expect(config.upstreams[0]?.upstream.transport).toBe("stdio");
+    expect(config.defaults.action).toBe("deny");
+    const send = config.rules.find((rule) => rule.tool === "mail__send");
+    expect(send?.action).toBe("allow");
+    expect(send?.args).toBeUndefined();
+    expect(config.flows[0]?.name).toBe("no-send-after-untrusted-content");
+    expect(config.flows[0]?.action).toBe("approve");
   });
 
   it("loads a stdio upstream and interpolates env vars", () => {
@@ -47,18 +53,34 @@ upstreams:
     }
   });
 
-  it("refuses policy sections, tool pinning, and secretRef", () => {
-    expect(() => loadConfig(`${BASE}rules:\n  - tool: notes__read\n    action: allow\n`)).toThrow(ConfigError);
-    expect(() =>
-      loadConfig(`
+  it("accepts policy sections and tool pinning, and still refuses secretRef", () => {
+    const config = loadConfig(`${BASE}rules:\n  - tool: notes__read\n    action: allow\n`);
+    expect(config.rules).toHaveLength(1);
+    const pinned = loadConfig(`
 version: 1
 upstreams:
   notes:
     transport: stdio
     command: ["node", "server.js"]
     pinTools: true
+`);
+    expect(pinned.upstreams[0]?.upstream.pinTools).toBe(true);
+    expect(pinned.upstreams[0]?.upstream.onPinMismatch).toBe("deny");
+    expect(() =>
+      loadConfig(`
+version: 1
+rules:
+  - tool: notes__read
+    action: allow
+    args:
+      path:
+        pattern: "("
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
 `),
-    ).toThrow(/pinTools/);
+    ).toThrow(/pattern/);
     expect(() =>
       loadConfig(`
 version: 1
@@ -96,6 +118,13 @@ describe("redact", () => {
       token: "[REDACTED]",
       nested: { apiKey: "[REDACTED]" },
     });
-    expect(redact("mail me at ada@example.com")).toBe("mail me at [REDACTED_EMAIL]");
+    expect(redact("mail me at ada@example.com")).toBe("mail me at a•••@example.com");
+    expect(redact("john@outsidecorp.com")).toBe("j•••@outsidecorp.com");
+    expect(redact("q@outside-sample.example")).toBe("q•••@outside-sample.example");
+    expect(redact({ to: "q@outside-sample.example", token: "q@outside-sample.example" })).toEqual({
+      to: "q•••@outside-sample.example",
+      token: "[REDACTED]",
+    });
+    expect(redact("Bearer sekret and sk-abcdefgh")).toBe("Bearer [REDACTED] and [REDACTED]");
   });
 });

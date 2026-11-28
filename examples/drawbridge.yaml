@@ -1,15 +1,35 @@
-# Drawbridge milestone 1. Policy sections (rules, flows, scanner, approval)
-# are rejected on purpose until they are enforced. See README.
+# Drawbridge example policy.
+# mail__send is allow with no allowDomains. The tainted-session flow is what
+# holds that send. Scanner and approval channels are accepted and not enforced
+# yet (milestones 3 and 4). secretRef is still refused.
 version: 1
 
 audit:
   path: ./drawbridge-audit.jsonl
+
+pins:
+  path: ./drawbridge.pins.json
+
+defaults:
+  action: deny
+  fromAnnotations: true
+
+approval:
+  channels: [elicitation, dashboard, cli]
+  highRisk: dashboard-only
+  timeoutSeconds: 120
+
+scanner:
+  mode: block
+  scanDescriptions: true
+  classifier: off
 
 upstreams:
   notes:
     transport: stdio
     command: ["node", "examples/demo-upstream/dist/index.js"]
     trusted: false
+    pinTools: false
 
   # Streamable HTTP upstream. Values like ${REMOTE_MCP_TOKEN} are read from
   # the gateway process environment. The MCP client's own credentials are
@@ -20,3 +40,26 @@ upstreams:
   #   url: http://127.0.0.1:3000/mcp
   #   headers:
   #     Authorization: ${REMOTE_MCP_TOKEN}
+
+rules:
+  - tool: notes__read
+    action: allow
+    args:
+      path:
+        pattern: '^notes/.*\.md$'
+        maxLength: 200
+  - tool: notes__echo
+    action: allow
+  # No allowDomains. A tainted session is held by the flow below.
+  - tool: mail__send
+    action: allow
+  - tool: "*__delete_*"
+    action: deny
+
+flows:
+  - name: no-send-after-untrusted-content
+    when:
+      sessionTainted: true
+    tools: [mail__send, "*__http_post", "*__create_issue"]
+    action: approve
+    reason: Untrusted content entered this session

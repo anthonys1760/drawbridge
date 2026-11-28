@@ -3,23 +3,99 @@ import { z } from "zod";
 import { ConfigError } from "./errors.js";
 import { assertUpstreamName } from "./namespace.js";
 
-const RESERVED_SECTIONS = ["defaults", "rules", "flows", "scanner", "approval"] as const;
+const actionSchema = z.enum(["allow", "deny", "approve"]);
+
+const rateLimitSchema = z
+  .strictObject({
+    perMinute: z.number().int().positive().optional(),
+    perSession: z.number().int().positive().optional(),
+  })
+  .refine((value) => value.perMinute !== undefined || value.perSession !== undefined, {
+    message: "rateLimit needs perMinute or perSession",
+  });
+
+const argConstraintSchema = z
+  .strictObject({
+    pattern: z.string().min(1).optional(),
+    enum: z.array(z.string()).min(1).optional(),
+    allowDomains: z.array(z.string().min(1)).min(1).optional(),
+    maxLength: z.number().int().nonnegative().optional(),
+  })
+  .refine(
+    (value) =>
+      value.pattern !== undefined ||
+      value.enum !== undefined ||
+      value.allowDomains !== undefined ||
+      value.maxLength !== undefined,
+    { message: "argument constraint needs pattern, enum, allowDomains, or maxLength" },
+  );
+
+const ruleSchema = z.strictObject({
+  tool: z.string().min(1),
+  action: actionSchema,
+  args: z.record(z.string(), argConstraintSchema).optional(),
+  rateLimit: rateLimitSchema.optional(),
+});
+
+const flowSchema = z.strictObject({
+  name: z.string().min(1),
+  when: z.strictObject({ sessionTainted: z.boolean() }),
+  tools: z.array(z.string().min(1)).min(1),
+  action: actionSchema,
+  reason: z.string().min(1).optional(),
+});
+
+const defaultsSchema = z.strictObject({
+  action: actionSchema.optional().default("deny"),
+  fromAnnotations: z.boolean().optional().default(true),
+  rateLimit: rateLimitSchema.optional(),
+});
+
+const scannerSchema = z.strictObject({
+  mode: z.enum(["block", "warn", "wrap"]).optional().default("block"),
+  scanDescriptions: z.boolean().optional().default(true),
+  classifier: z.enum(["off", "local", "api"]).optional().default("off"),
+  allowlist: z
+    .array(
+      z.strictObject({
+        match: z.string().min(1),
+        upstream: z.string().min(1),
+        expires: z.string().min(1),
+      }),
+    )
+    .optional()
+    .default([]),
+});
+
+const approvalSchema = z.strictObject({
+  channels: z
+    .array(z.enum(["elicitation", "dashboard", "cli"]))
+    .optional()
+    .default(["elicitation", "dashboard", "cli"]),
+  highRisk: z.literal("dashboard-only").optional().default("dashboard-only"),
+  timeoutSeconds: z.number().int().positive().optional().default(120),
+});
+
+const upstreamSecurity = {
+  trusted: z.boolean().optional().default(false),
+  pinTools: z.boolean().optional().default(false),
+  /** A changed or missing pin is denied, or held (`approve`) until a person resolves it. */
+  onPinMismatch: z.enum(["deny", "approve"]).optional().default("deny"),
+};
 
 const stdioUpstream = z.strictObject({
   transport: z.literal("stdio"),
   command: z.array(z.string().min(1)).min(1),
   env: z.record(z.string(), z.string()).optional(),
   cwd: z.string().min(1).optional(),
-  trusted: z.boolean().optional().default(false),
-  pinTools: z.boolean().optional().default(false),
+  ...upstreamSecurity,
 });
 
 const httpUpstream = z.strictObject({
   transport: z.literal("http"),
   url: z.string().min(1),
   headers: z.record(z.string(), z.string()).optional(),
-  trusted: z.boolean().optional().default(false),
-  pinTools: z.boolean().optional().default(false),
+  ...upstreamSecurity,
 });
 
 const upstreamSchema = z.discriminatedUnion("transport", [stdioUpstream, httpUpstream]);
@@ -32,8 +108,29 @@ const configSchema = z.strictObject({
     })
     .optional()
     .default({ path: "drawbridge-audit.jsonl" }),
+  pins: z
+    .strictObject({
+      path: z.string().min(1),
+    })
+    .optional()
+    .default({ path: "drawbridge.pins.json" }),
+  defaults: defaultsSchema.optional().default({ action: "deny", fromAnnotations: true }),
+  rules: z.array(ruleSchema).optional().default([]),
+  flows: z.array(flowSchema).optional().default([]),
+  scanner: scannerSchema.optional().default({ mode: "block", scanDescriptions: true, classifier: "off", allowlist: [] }),
+  approval: approvalSchema.optional().default({
+    channels: ["elicitation", "dashboard", "cli"],
+    highRisk: "dashboard-only",
+    timeoutSeconds: 120,
+  }),
   upstreams: z.record(z.string(), upstreamSchema),
 });
+
+export type PolicyAction = z.infer<typeof actionSchema>;
+export type RateLimitConfig = z.infer<typeof rateLimitSchema>;
+export type ArgConstraint = z.infer<typeof argConstraintSchema>;
+export type PolicyRule = z.infer<typeof ruleSchema>;
+export type PolicyFlow = z.infer<typeof flowSchema>;
 
 export type StdioUpstreamConfig = z.infer<typeof stdioUpstream>;
 export type HttpUpstreamConfig = z.infer<typeof httpUpstream>;
@@ -53,13 +150,6 @@ export function loadConfig(text: string, env: NodeJS.ProcessEnv = process.env): 
     throw new ConfigError("Config must be a YAML mapping");
   }
   const record = raw as Record<string, unknown>;
-  for (const section of RESERVED_SECTIONS) {
-    if (section in record) {
-      throw new ConfigError(
-        `Config section \`${section}\` is not enforced yet. Milestone 1 would ignore it and allow every routed call, so Drawbridge refuses to start. Policy enforcement is milestone 2.`,
-      );
-    }
-  }
   rejectUnimplementedUpstreamSecurity(record.upstreams);
 
   const parsed = configSchema.safeParse(raw);
@@ -76,14 +166,11 @@ export function loadConfig(text: string, env: NodeJS.ProcessEnv = process.env): 
     }
   }
 
+  validateRulePatterns(parsed.data.rules);
+
   const upstreams = names.sort().map((name) => {
     const upstream = parsed.data.upstreams[name];
     if (!upstream) throw new ConfigError(`Missing upstream "${name}"`);
-    if (upstream.pinTools) {
-      throw new ConfigError(
-        `Upstream "${name}" sets pinTools: true, which is not enforced until milestone 2. Refusing to start.`,
-      );
-    }
     return { name, upstream: interpolateUpstream(upstream, env) };
   });
 
@@ -95,11 +182,40 @@ export function loadConfig(text: string, env: NodeJS.ProcessEnv = process.env): 
   }
   if (auditPath.length === 0) throw new ConfigError("audit.path is empty");
 
+  let pinsPath: string;
+  try {
+    pinsPath = interpolate(parsed.data.pins.path, env);
+  } catch (error) {
+    throw new ConfigError(error instanceof Error ? error.message : String(error));
+  }
+  if (pinsPath.length === 0) throw new ConfigError("pins.path is empty");
+
   return {
     version: 1,
     audit: { path: auditPath },
+    pins: { path: pinsPath },
+    defaults: parsed.data.defaults,
+    rules: parsed.data.rules,
+    flows: parsed.data.flows,
+    scanner: parsed.data.scanner,
+    approval: parsed.data.approval,
     upstreams,
   };
+}
+
+function validateRulePatterns(rules: { args?: Record<string, { pattern?: string }> }[]): void {
+  for (const [index, rule] of rules.entries()) {
+    for (const [key, constraint] of Object.entries(rule.args ?? {})) {
+      if (constraint.pattern === undefined) continue;
+      try {
+        new RegExp(constraint.pattern);
+      } catch (error) {
+        throw new ConfigError(
+          `rules.${index}.args.${key}.pattern is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
 }
 
 function rejectUnimplementedUpstreamSecurity(upstreams: unknown): void {

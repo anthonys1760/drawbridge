@@ -1,11 +1,12 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   JsonlAuditLog,
+  YamlPolicy,
+  loadPinFile,
   ulid,
   type DrawbridgeConfig,
   type PolicyEngine,
 } from "@drawbridge/core";
-import { createDefaultPolicy } from "./dispatch.js";
 import { createGatewayServer } from "./server.js";
 import { SdkUpstreamPool, type UpstreamPool } from "./upstreams.js";
 
@@ -23,7 +24,10 @@ export interface ServeOptions {
 export async function serveConfig(config: DrawbridgeConfig, options: ServeOptions = {}): Promise<void> {
   const sessionId = options.sessionId ?? ulid();
   const audit = await JsonlAuditLog.open(config.audit.path);
-  const policy = options.policy ?? createDefaultPolicy();
+  const pins = config.upstreams.some((entry) => entry.upstream.pinTools)
+    ? await loadPinFile(config.pins.path)
+    : undefined;
+  const policy = options.policy ?? new YamlPolicy(config, pins ? { pins } : {});
   let pool: UpstreamPool | undefined;
   let closed = false;
   let settleReady: (pool: UpstreamPool) => void = () => undefined;

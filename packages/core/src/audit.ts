@@ -16,7 +16,8 @@ import { ulid } from "./ulid.js";
  * `taint` is the session state before this event (what policy sees).
  * `taintAfter` is set only when this event changes that state, so replay can
  * show the flip on the event that introduced the untrusted content.
- * See the README audit schema.
+ * The normative write-up is docs/audit-schema.md. `verifyAuditJsonl` and
+ * `JsonlAuditLog.open` (gateway startup) both use `auditEventSchema`.
  *
  * A decision that resolves an `approve_pending` record sets
  * `approval.pendingId` to that record's `id`. The pending record itself sets
@@ -25,11 +26,18 @@ import { ulid } from "./ulid.js";
 export const scannerHitTargetSchema = z.enum(["args", "result", "description"]);
 export const scannerVerdictSchema = z.enum(["clean", "flagged", "wrapped", "blocked"]);
 
+/**
+ * Bracket/dot field path. Identifiers, numeric indexes, or both:
+ * `content[0].text`, `args.to`, `body`. Dot-numeric (`content.0.text`) is
+ * not accepted; use brackets for indexes.
+ */
+export const HIT_PATH = /^(?:[A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]*)\])*$/;
+
 export const auditScannerHitSchema = z.strictObject({
   rule: z.string(),
   span: z.tuple([z.number(), z.number()]),
   target: scannerHitTargetSchema,
-  path: z.string(),
+  path: z.string().regex(HIT_PATH),
 });
 
 export const auditScannerSchema = z.strictObject({
@@ -73,6 +81,12 @@ export const auditEventSchema = z.strictObject({
   approval: auditApprovalSchema.optional(),
   /** ISO 8601 UTC. Set on `approve_pending` records. */
   expiresAt: z.string().optional(),
+  /**
+   * `id` of the intent line this outcome completes. Set on outcome lines of
+   * a forwarded call so interleaved identical calls still pair. Approval
+   * decisions use `approval.pendingId` instead, and do not repeat scanner hits.
+   */
+  intentId: z.string().optional(),
   resultHash: z.string().optional(),
   durationMs: z.number().optional(),
   prevHash: z.string(),
@@ -151,10 +165,18 @@ export function verifyAuditJsonl(contents: string): AuditVerifyResult {
     } catch {
       return { ok: false, events, error: "line is not valid JSON", line: lineNumber };
     }
-    if (!isAuditEvent(parsed)) {
-      return { ok: false, events, error: "line is not an audit event", line: lineNumber };
+    const checked = auditEventSchema.safeParse(parsed);
+    if (!checked.success) {
+      // This is the schema `audit verify` and gateway startup both use.
+      // Optional taintAfter and intentId are part of it. The detail names the
+      // field that was missing, mistyped, or unknown.
+      const detail = checked.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+        .join("; ");
+      return { ok: false, events, error: `line is not an audit event (${detail})`, line: lineNumber };
     }
-    if (parsed.prevHash !== previous) {
+    const event = checked.data;
+    if (event.prevHash !== previous) {
       return {
         ok: false,
         events,
@@ -162,7 +184,7 @@ export function verifyAuditJsonl(contents: string): AuditVerifyResult {
         line: lineNumber,
       };
     }
-    const { hash, ...rest } = parsed;
+    const { hash, ...rest } = event;
     const expected = eventHash(rest);
     if (expected !== hash) {
       return { ok: false, events, error: "hash does not match the event contents", line: lineNumber };
@@ -231,8 +253,4 @@ export class JsonlAuditLog implements AuditSink {
     this.lastHash = full.hash;
     return full;
   }
-}
-
-function isAuditEvent(value: unknown): value is AuditEvent {
-  return auditEventSchema.safeParse(value).success;
 }
