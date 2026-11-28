@@ -1,111 +1,109 @@
-// Drawbridge design tokens (Direction A "Keep"). Mirrors tokens.css — keep both in sync.
-// Generated from tokens.css; prefer CSS custom properties in components (var(--db-*)),
-// use these for canvas/SVG drawing, tests (contrast checks) and Storybook.
+/**
+ * Drawbridge design tokens — upgrade v0.2.
+ * Drop-in replacement for docs/design/tokens.ts.
+ *
+ * DELTA vs main@5b0ff23:
+ *   Color tokens unchanged.
+ *   type/space values are CSS clamp() / unitless line-heights (see tokens.css).
+ *   Added type["3xl"], space[16], breakpoint.xs/sm/lg, container, containerPad.
+ *   breakpoint.md stays 768; xl stays 1200 (dashboard split).
+ *   Inline styles that used scale.topbarH may keep "56px" or switch to
+ *   "var(--db-topbar-h)". Do not hard-code old px type sizes in new CSS.
+ */
+
 export const color = {
-  dark: {
-    "bg": "#0B0D10",
-    "surface": "#111418",
-    "raised": "#171B21",
-    "overlay": "rgba(5, 6, 8, 0.72)",
-    "border": "#2A3039",
-    "borderControl": "#5F6873",
-    "text": "#E7E9EC",
-    "textMuted": "#A1A9B3",
-    "textSubtle": "#808996",
-    "textOnAccent": "#0B0D10",
-    "accent": "#5EE6A8",
-    "accentSoft": "#0F2A1F",
-    "accentHover": "#7AEDB9",
-    "warn": "#F2B84B",
-    "warnSoft": "#2A2110",
-    "taintMark": "#3A2E12",
-    "danger": "#F7797B",
-    "dangerSoft": "#2A1416",
-    "info": "#86B0FF",
-    "infoSoft": "#13203A",
-    "focus": "#86B0FF",
-    "codeKey": "#A1A9B3",
-    "codeString": "#C9D1D9",
-    "codeNumber": "#86B0FF",
-    "codePunct": "#808996"
-  },
-  light: {
-    "bg": "#F7F7F5",
-    "surface": "#FFFFFF",
-    "raised": "#F0F0EC",
-    "overlay": "rgba(16, 19, 24, 0.40)",
-    "border": "#D9DAD5",
-    "borderControl": "#8A8E88",
-    "text": "#101318",
-    "textMuted": "#4F5864",
-    "textSubtle": "#646D79",
-    "textOnAccent": "#FFFFFF",
-    "accent": "#08774A",
-    "accentSoft": "#E3F4EB",
-    "accentHover": "#066640",
-    "warn": "#8A5600",
-    "warnSoft": "#FDF3DC",
-    "taintMark": "#FCE9B8",
-    "danger": "#B3261E",
-    "dangerSoft": "#FBE7E5",
-    "info": "#1F5FD1",
-    "infoSoft": "#E6EEFC",
-    "focus": "#1F5FD1",
-    "codeKey": "#4F5864",
-    "codeString": "#101318",
-    "codeNumber": "#1F5FD1",
-    "codePunct": "#646D79"
-  },
+  bg: "var(--db-bg)",
+  bgElevated: "var(--db-bg-elevated)",
+  bgSunken: "var(--db-bg-sunken)",
+  surface: "var(--db-surface)",
+  surfaceHover: "var(--db-surface-hover)",
+  border: "var(--db-border)",
+  borderStrong: "var(--db-border-strong)",
+  text: "var(--db-text)",
+  textMuted: "var(--db-text-muted)",
+  textFaint: "var(--db-text-faint)",
+  accent: "var(--db-accent)",
+  accentHover: "var(--db-accent-hover)",
+  accentMuted: "var(--db-accent-muted)",
+  accentOn: "var(--db-accent-on)",
+  warn: "var(--db-warn)",
+  warnMuted: "var(--db-warn-muted)",
+  warnOn: "var(--db-warn-on)",
+  danger: "var(--db-danger)",
+  dangerMuted: "var(--db-danger-muted)",
+  dangerOn: "var(--db-danger-on)",
+  taint: "var(--db-taint)",
+  taintMuted: "var(--db-taint-muted)",
+  held: "var(--db-held)",
+  heldMuted: "var(--db-held-muted)",
+  denied: "var(--db-denied)",
+  deniedMuted: "var(--db-denied-muted)",
+  approved: "var(--db-approved)",
+  approvedMuted: "var(--db-approved-muted)",
+  trusted: "var(--db-trusted)",
 } as const;
 
+export const type = {
+  font: "var(--db-font)",
+  mono: "var(--db-font-mono)",
+  xs: "var(--db-text-xs)",
+  sm: "var(--db-text-sm)",
+  md: "var(--db-text-md)",
+  lg: "var(--db-text-lg)",
+  xl: "var(--db-text-xl)",
+  "2xl": "var(--db-text-2xl)",
+  "3xl": "var(--db-text-3xl)",
+  lhXs: "var(--db-lh-xs)",
+  lhSm: "var(--db-lh-sm)",
+  lhMd: "var(--db-lh-md)",
+  lhLg: "var(--db-lh-lg)",
+  lhXl: "var(--db-lh-xl)",
+  lh2xl: "var(--db-lh-2xl)",
+  lh3xl: "var(--db-lh-3xl)",
+  trackingTight: "var(--db-tracking-tight)",
+  trackingMono: "var(--db-tracking-mono)",
+} as const;
+
+export const space = {
+  1: "var(--db-space-1)",
+  2: "var(--db-space-2)",
+  3: "var(--db-space-3)",
+  4: "var(--db-space-4)",
+  5: "var(--db-space-5)",
+  6: "var(--db-space-6)",
+  8: "var(--db-space-8)",
+  10: "var(--db-space-10)",
+  12: "var(--db-space-12)",
+  16: "var(--db-space-16)",
+} as const;
+
+export const radius = {
+  sm: "var(--db-radius-sm)",
+  md: "var(--db-radius-md)",
+  lg: "var(--db-radius-lg)",
+  pill: "var(--db-radius-pill)",
+} as const;
+
+export const breakpoint = {
+  xs: 360,
+  sm: 480,
+  md: 768,
+  lg: 1024,
+  xl: 1200,
+} as const;
+
+export const container = {
+  max: "var(--db-container)",
+  pad: "var(--db-container-pad)",
+} as const;
+
+/** Layout constants used by the dashboard (packages/dashboard/src/app.tsx). */
 export const scale = {
-  "fontSans": "\"Geist\", \"Inter\", ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif",
-  "fontMono": "\"Geist Mono\", \"JetBrains Mono\", ui-monospace, \"SFMono-Regular\", Menlo, monospace",
-  "textXs": "12px",
-  "lhXs": "16px",
-  "textSm": "13px",
-  "lhSm": "20px",
-  "textMd": "14px",
-  "lhMd": "22px",
-  "textLg": "16px",
-  "lhLg": "24px",
-  "textXl": "20px",
-  "lhXl": "28px",
-  "text2xl": "28px",
-  "lh2xl": "36px",
-  "weightRegular": "400",
-  "weightMedium": "500",
-  "weightSemibold": "600",
-  "trackingTight": "-0.01em",
-  "trackingLabel": "0.04em",
-  "space1": "4px",
-  "space2": "8px",
-  "space3": "12px",
-  "space4": "16px",
-  "space5": "20px",
-  "space6": "24px",
-  "space8": "32px",
-  "space10": "40px",
-  "space12": "48px",
-  "radiusSm": "4px",
-  "radiusMd": "6px",
-  "radiusLg": "10px",
-  "radiusPill": "999px",
-  "borderWidth": "1px",
-  "focusWidth": "2px",
-  "focusOffset": "2px",
-  "topbarH": "56px",
-  "queueW": "340px",
-  "historyW": "360px",
-  "actionbarH": "72px",
-  "targetMin": "44px",
-  "bpMd": "768px",
-  "bpLg": "1200px",
-  "ease": "cubic-bezier(0.2, 0, 0, 1)",
-  "durFast": "120ms",
-  "durBase": "180ms",
-  "durSlow": "280ms"
+  topbarH: "var(--db-topbar-h)",
+  rowH: 48,
+  btnH: 36,
+  btnHTouch: 44,
+  queueW: 340,
+  historyW: 360,
+  radius: 10,
 } as const;
-
-export type ThemeName = keyof typeof color;
-export const cssVar = (name: string) => `var(--db-${name})`;

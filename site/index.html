@@ -6,7 +6,7 @@
     <title>Drawbridge</title>
     <meta
       name="description"
-      content="Drawbridge is an open-source MCP security gateway. It sits between an agent and its tools, enforces policy, and writes a hash-chained audit log."
+      content="An MCP gateway that treats every tool result as untrusted, and asks you before an agent sends anything out."
     />
     <script>
       (function () {
@@ -16,199 +16,211 @@
           stored = localStorage.getItem(key) || "dark";
         } catch (e) {}
         if (stored !== "light" && stored !== "dark" && stored !== "system") stored = "system";
-        document.documentElement.setAttribute("data-theme", stored);
+        var resolved = stored === "system"
+          ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+          : stored;
+        document.documentElement.setAttribute("data-theme", resolved);
+        document.documentElement.setAttribute("data-theme-choice", stored);
       })();
     </script>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="wrap">
-      <header>
-        <a class="mark" href="#top">
-          <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
-            <rect x="1" y="3" width="20" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.5" />
-            <path d="M1 8h20" stroke="var(--mint)" stroke-width="1.5" />
-            <path d="M7 8v11M15 8v11" stroke="currentColor" stroke-width="1.5" />
-          </svg>
+    <header class="site-header">
+      <div class="db-container">
+        <a class="brand" href="#top">
+          <img class="mark-dark" src="./brand/drawbridge-mark.svg" alt="" width="28" height="28" />
+          <img class="mark-light" src="./brand/drawbridge-mark-light.svg" alt="" width="28" height="28" />
           Drawbridge
         </a>
-        <div class="theme" role="group" aria-label="Color theme">
+        <div class="theme" role="group" aria-label="Theme">
           <button type="button" data-theme-value="system">System</button>
           <button type="button" data-theme-value="dark">Dark</button>
           <button type="button" data-theme-value="light">Light</button>
         </div>
-      </header>
+      </div>
+    </header>
 
-      <main id="top">
-        <h1>A gate in front of the tools.</h1>
-        <p class="lede">
-          Drawbridge is an open-source MCP security gateway. An agent connects to it over stdio. Drawbridge connects to
-          the upstream servers you list, shows one namespaced catalog, checks each call against policy, and writes a
-          hash-chained audit log before anything is forwarded.
+    <section class="hero" id="top">
+      <div class="db-container">
+        <p class="hero-word">
+          <img class="mark-dark" src="./brand/drawbridge-mark.svg" alt="" width="64" height="64" />
+          <img class="mark-light" src="./brand/drawbridge-mark-light.svg" alt="" width="64" height="64" />
+          Drawbridge
         </p>
-        <div class="actions">
-          <a class="primary" href="https://github.com/anthonys1760/drawbridge">Repository</a>
-          <a class="ghost" href="https://github.com/anthonys1760/drawbridge/blob/main/LICENSE">Apache-2.0</a>
+        <p class="lede">An MCP gateway that treats every tool result as untrusted, and asks you before an agent sends anything out.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="./replay/">Watch the audit replay</a>
+          <a class="btn btn-secondary" href="https://github.com/anthonys1760/drawbridge" rel="noopener noreferrer">View on GitHub</a>
         </div>
+      </div>
+    </section>
 
-        <section>
-          <h2>Architecture</h2>
-          <h3>One process between the agent and its servers.</h3>
-          <div class="panel">
-            <svg class="diagram" viewBox="0 0 860 280" role="img" aria-labelledby="arch-title arch-desc">
-              <title id="arch-title">Drawbridge between an agent and upstream MCP servers</title>
-              <desc id="arch-desc">
-                The agent talks stdio to Drawbridge. Drawbridge runs policy, a scanner, and a hash-chained audit log,
-                then connects onward over stdio or Streamable HTTP.
-              </desc>
-              <defs>
-                <style>
-                  .box { fill: var(--bg); stroke: var(--line); }
-                  .label { fill: var(--text); font: 600 16px Geist, sans-serif; }
-                  .sub { fill: var(--muted); font: 400 13px Geist, sans-serif; }
-                  .mint { fill: var(--mint); }
-                  .amber { fill: var(--amber); }
-                  .red { fill: var(--red); }
-                  .arrow { stroke: var(--mint); fill: none; stroke-width: 1.5; }
-                </style>
-              </defs>
-              <rect class="box" x="16" y="78" width="180" height="124" rx="16" />
-              <text class="label" x="36" y="128">Agent</text>
-              <text class="sub" x="36" y="152">MCP client</text>
-              <text class="sub" x="36" y="172">stdio, 2026-07-28</text>
+    <section class="section" id="how">
+      <div class="db-container">
+        <h2 class="section-title">How it works</h2>
+        <div class="steps">
+          <article class="step">
+            <div class="step-n">1</div>
+            <h3>Gateway</h3>
+            <p>One process sits between the agent and every MCP server. Stdio in, a namespaced catalog out.</p>
+          </article>
+          <article class="step">
+            <div class="step-n">2</div>
+            <h3>Policy, taint, and wrap</h3>
+            <p>First-match policy decides the scanner. Untrusted results come back between <code>&lt;&lt;untrusted&gt;&gt;</code> and <code>&lt;&lt;end untrusted&gt;&gt;</code>, and the session is tainted.</p>
+          </article>
+          <article class="step">
+            <div class="step-n">3</div>
+            <h3>Approvals</h3>
+            <p>After untrusted content, a send waits for a person. Approve once, or deny. Unanswered calls are denied after 120 seconds. Approvals are once-only.</p>
+          </article>
+          <article class="step">
+            <div class="step-n">4</div>
+            <h3>Audit chain</h3>
+            <p>Every event is hashed to the one before it. The in-browser replay recomputes the chain from a JSONL log; nothing is trusted just because it is on disk.</p>
+          </article>
+        </div>
+      </div>
+    </section>
 
-              <path class="arrow" d="M206 140h48" />
-              <path class="arrow" d="M246 134l8 6-8 6" />
-
-              <rect class="box" x="264" y="36" width="300" height="208" rx="16" stroke="var(--mint)" />
-              <text class="label" x="284" y="72">Drawbridge</text>
-              <text class="sub" x="284" y="108">Policy, first match wins</text>
-              <text class="sub" x="284" y="136">Scanner on descriptions and results</text>
-              <text class="amber" x="284" y="170" style="font: 500 13px Geist, sans-serif">Held and tainted sessions</text>
-              <text class="red" x="284" y="198" style="font: 500 13px Geist, sans-serif">Deny, and a broken chain</text>
-              <text class="sub" x="284" y="226">Hash-chained JSONL audit log</text>
-
-              <path class="arrow" d="M574 140h48" />
-              <path class="arrow" d="M614 134l8 6-8 6" />
-
-              <rect class="box" x="632" y="48" width="212" height="72" rx="16" />
-              <text class="label" x="652" y="80">notes</text>
-              <text class="sub" x="652" y="102">stdio upstream</text>
-              <rect class="box" x="632" y="148" width="212" height="72" rx="16" />
-              <text class="label" x="652" y="180">remote</text>
-              <text class="sub" x="652" y="202">Streamable HTTP</text>
-            </svg>
-            <div class="legend">
-              <span class="chip"><i></i>Allow and the gateway</span>
-              <span class="chip held"><i></i>Held or tainted</span>
-              <span class="chip deny"><i></i>Deny or a broken chain</span>
-            </div>
+    <section class="section" id="attacks">
+      <div class="db-container">
+        <div class="score-row">
+          <div>
+            <h2 class="section-title">Attack results</h2>
+            <p class="lede">The attack suite is 8/8 on the scenarios below. This is the recorded run in <code>docs/attack-results.md</code>, not a forecast.</p>
           </div>
-        </section>
+          <div class="score">8/8</div>
+        </div>
+        <table class="attacks">
+          <thead>
+            <tr><th>Scenario</th><th>Expected</th><th>Result</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Indirect prompt injection to exfiltration</td><td>fixture wrapped, then held and not sent</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Direct prompt injection to exfiltration</td><td>argument echoed wrapped, then held and not sent</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Tool-description poisoning</td><td>tool description wrapped</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Rug pull after the first tools/list</td><td>first call allowed, changed description denied</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Confused deputy (client credentials)</td><td>client credentials stripped and not forwarded</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Secret leakage</td><td>secret absent from audit, stderr, and dashboard</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Audit tampering</td><td>audit verify exits 1</td><td><span class="badge">Pass</span></td></tr>
+            <tr><td>Kill switch</td><td>new call denied while paused</td><td><span class="badge">Pass</span></td></tr>
+          </tbody>
+        </table>
+        <div class="attack-cards">
+          <article class="attack-card"><h3>Indirect prompt injection to exfiltration</h3><p>fixture wrapped, then held and not sent</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Direct prompt injection to exfiltration</h3><p>argument echoed wrapped, then held and not sent</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Tool-description poisoning</h3><p>tool description wrapped</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Rug pull after the first tools/list</h3><p>first call allowed, changed description denied</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Confused deputy (client credentials)</h3><p>client credentials stripped and not forwarded</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Secret leakage</h3><p>secret absent from audit, stderr, and dashboard</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Audit tampering</h3><p>audit verify exits 1</p><span class="badge">Pass</span></article>
+          <article class="attack-card"><h3>Kill switch</h3><p>new call denied while paused</p><span class="badge">Pass</span></article>
+        </div>
+        <p class="source-link"><a href="https://github.com/anthonys1760/drawbridge/blob/main/docs/attack-results.md">Recorded scorecard</a> · <a href="https://github.com/anthonys1760/drawbridge/blob/main/docs/attack-results.json">JSON</a></p>
+      </div>
+    </section>
 
-        <section>
-          <h2>Install</h2>
-          <h3>Node 22 and pnpm 10.</h3>
-          <ol class="steps">
-            <li><strong>Install and build</strong> from a checkout of the repository.</li>
-            <li><strong>Serve</strong> the example config. Stdout is the MCP stream. Logs go to stderr.</li>
-            <li><strong>Verify</strong> the audit log after a session. A rewritten or dropped line fails the check.</li>
-          </ol>
-          <pre><code>pnpm install
+    <section class="section">
+      <div class="db-container">
+        <div class="cta-band">
+          <p>See a held send, a wrap, and the hash chain in the browser.</p>
+          <a class="btn btn-primary" href="./replay/">Open the audit replay</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="start">
+      <div class="db-container">
+        <h2 class="section-title">Quick start</h2>
+        <p class="lede">Install, build, and run the local demo. The config below is trimmed from <code>examples/drawbridge.yaml</code>. The README has the full file and the demo script.</p>
+        <div class="quick">
+          <div class="code-block">
+            <header>
+              <span>Install</span>
+              <button class="copy" type="button" aria-label="Copy install commands">Copy</button>
+            </header>
+            <pre>pnpm install
 pnpm build
-pnpm demo</code></pre>
-          <p class="note">
-            <code>pnpm demo</code> reads the sample note, taints the session, and holds <code>mail__send</code>.
-            The read-only audit replay is <a href="replay/">on this site</a>. It checks the hash chain in the browser.
-          </p>
-          <p class="note">
-            Point a 2026-07-28 client at that command. Tools are named <code>upstream__tool</code>, for example
-            <code>notes__read</code>.
-          </p>
-        </section>
+pnpm demo</pre>
+          </div>
+          <div class="code-block">
+            <header>
+              <span>examples/drawbridge.yaml</span>
+              <button class="copy" type="button" aria-label="Copy config">Copy</button>
+            </header>
+            <pre># examples/drawbridge.yaml
+# Credentials use env: or file: refs.
+scanner:
+  mode: wrap
+upstreams:
+  notes:
+    command: ["node", "examples/demo-upstream/dist/index.js"]
+    trusted: false
+  mail:
+    command: ["node", "examples/demo-upstream/dist/index.js", "mail"]
+    trusted: true</pre>
+          </div>
+        </div>
+        <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
 
-        <section>
-          <h2>Roadmap</h2>
-          <h3>Milestones 1 through 6.</h3>
-          <ol class="road">
-            <li class="done">
-              <span class="id">M1 done</span>
-              <div>
-                <strong>Pass-through proxy</strong>
-                <p>Namespaced catalog and a write-ahead hash-chained audit log.</p>
-              </div>
-            </li>
-            <li class="done">
-              <span class="id">M2 done</span>
-              <div>
-                <strong>Policy engine</strong>
-                <p>Allow, deny, and approve rules, argument checks, rate limits, flows, and tool pins.</p>
-              </div>
-            </li>
-            <li class="done">
-              <span class="id">M3 done</span>
-              <div>
-                <strong>Scanner and taint</strong>
-                <p>Heuristics on descriptions and results, wrap / warn / block, and session taint.</p>
-              </div>
-            </li>
-            <li class="done">
-              <span class="id">M4 done</span>
-              <div>
-                <strong>Approvals</strong>
-                <p>Elicitation, CLI, and dashboard. A held call waits for a person. Approvals are once-only in v0.1.</p>
-              </div>
-            </li>
-            <li class="done">
-              <span class="id">M5 done</span>
-              <div>
-                <strong>Secrets and the threat model</strong>
-                <p>Per-upstream credentials, no client-token passthrough, a kill switch, and docs/threat-model.md.</p>
-              </div>
-            </li>
-            <li class="done">
-              <span class="id">M6 done</span>
-              <div>
-                <strong>v0.1</strong>
-                <p>
-                  Attack suite and scored results. The static audit replay is
-                  <a href="replay/">part of this site</a>.
-                </p>
-              </div>
-            </li>
-          </ol>
-          <p class="note">
-            The replay is a read-only view of an audit log. Open it from this site. It does not call the network.
-          </p>
-        </section>
-      </main>
-
-      <footer>
-        <a href="https://github.com/anthonys1760/drawbridge">anthonys1760/drawbridge</a>
-        <a href="https://github.com/anthonys1760/drawbridge/blob/main/LICENSE">Apache License 2.0</a>
-        <span>Geist and Geist Mono, SIL Open Font License</span>
-      </footer>
-    </div>
+    <footer class="site-footer">
+      <div class="db-container">
+        <p>Apache-2.0. Geist is under the SIL Open Font License.</p>
+        <nav>
+          <a href="https://github.com/anthonys1760/drawbridge">GitHub</a>
+          <a href="https://github.com/anthonys1760/drawbridge/blob/main/docs/threat-model.md">Threat model</a>
+          <a href="./replay/">Audit replay</a>
+        </nav>
+      </div>
+    </footer>
     <script>
       (function () {
         var key = "drawbridge-theme";
-        var root = document.documentElement;
         var buttons = document.querySelectorAll("[data-theme-value]");
-        function apply(value) {
-          root.setAttribute("data-theme", value);
-          try {
-            localStorage.setItem(key, value);
-          } catch (e) {}
-          buttons.forEach(function (button) {
-            button.setAttribute("aria-pressed", button.getAttribute("data-theme-value") === value ? "true" : "false");
-          });
+        var query = window.matchMedia("(prefers-color-scheme: light)");
+        function choice() {
+          return document.documentElement.getAttribute("data-theme-choice") || "dark";
         }
+        function paint(next) {
+          var resolved = next === "system" ? (query.matches ? "light" : "dark") : next;
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.setAttribute("data-theme-choice", next);
+          buttons.forEach(function (button) {
+            button.setAttribute("aria-pressed", button.getAttribute("data-theme-value") === next ? "true" : "false");
+          });
+          try { localStorage.setItem(key, next); } catch (e) {}
+        }
+        paint(choice());
         buttons.forEach(function (button) {
           button.addEventListener("click", function () {
-            apply(button.getAttribute("data-theme-value"));
+            paint(button.getAttribute("data-theme-value"));
           });
         });
-        apply(root.getAttribute("data-theme") || "system");
+        query.addEventListener("change", function () {
+          if (choice() === "system") paint("system");
+        });
+        var status = document.getElementById("copy-status");
+        document.querySelectorAll(".copy").forEach(function (button) {
+          button.addEventListener("click", function () {
+            var pre = button.parentElement.nextElementSibling;
+            var label = button.getAttribute("aria-label") || "Copy";
+            navigator.clipboard.writeText(pre.innerText).then(function () {
+              button.textContent = "Copied";
+              status.textContent = "Copied";
+              window.setTimeout(function () {
+                button.textContent = "Copy";
+                status.textContent = "";
+              }, 1500);
+            }).catch(function () {
+              status.textContent = label + " failed";
+            });
+          });
+        });
       })();
     </script>
   </body>

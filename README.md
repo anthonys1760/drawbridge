@@ -1,6 +1,20 @@
 # Drawbridge
 
-<!-- TODO: Add the README hero. brand/readme-hero.png is not in this repo, and there is no brand wordmark SVG to use instead. -->
+<!--
+  README hero slot. Anthony confirms the image on the design PR.
+  The PNG files are not in this commit:
+    docs/brand/readme-hero.png
+    docs/brand/readme-hero@2x.png
+  Uncomment the block below once those files are added. Do not substitute a different image.
+
+<p align="center">
+  <img
+    src="docs/brand/readme-hero.png"
+    srcset="docs/brand/readme-hero.png 1x, docs/brand/readme-hero@2x.png 2x"
+    alt="Drawbridge: an MCP gateway that treats every tool result as untrusted, and asks you before an agent sends anything out."
+    width="1280" />
+</p>
+-->
 
 Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawbridge connects to the upstream MCP servers you list, shows one namespaced tool catalog (`notes__read`), checks the call, and writes a hash-chained audit log before it forwards.
 
