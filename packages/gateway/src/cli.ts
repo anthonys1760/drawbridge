@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig, verifyAuditJsonl } from "@drawbridge/core";
-import { approvalRequest, readApprovalState, writePaused } from "./approvals.js";
+import { approvalRequest, pauseStatePath, readApprovalState, writePaused } from "./approvals.js";
 import { pinUpstreams } from "./pin.js";
 import { serveConfig } from "./serve.js";
 
@@ -44,9 +44,10 @@ approvals
 
 pause, resume
   Deny every new tool call, and auto-deny calls that are already waiting.
-  The choice is written to drawbridge-pause.json beside the audit log, so a
-  restart stays paused until \`drawbridge resume\`. If the gateway is not
-  running, the command only writes that file.
+  The choice is written to drawbridge-pause.json beside the audit log first,
+  so a restart stays paused until \`drawbridge resume\`. The command then tells
+  the running gateway. If that gateway cannot be reached, the command says so
+  and exits nonzero. It does not report success for a pause it did not apply.
 `;
 
 async function main(): Promise<void> {
@@ -126,26 +127,28 @@ async function main(): Promise<void> {
 
 async function pauseCommand(paused: boolean, auditPath: string): Promise<void> {
   const verb = paused ? "paused" : "resumed";
+  const noun = paused ? "pause" : "resume";
+  const file = pauseStatePath(auditPath);
+  await writePaused(auditPath, paused);
   try {
     await readApprovalState(auditPath);
-  } catch {
-    await writePaused(auditPath, paused);
-    process.stdout.write(`${verb} (gateway is not running; the next start keeps this)\n`);
-    return;
-  }
-  try {
     const { status, body } = await approvalRequest(auditPath, "/api/pause", {
       method: "POST",
       body: { paused, channel: "cli" },
     });
     if (status !== 200) {
-      throw new Error(`${verb} failed (${status}) ${(body as { error?: string }).error ?? ""}`.trim());
+      const reason = body && typeof body === "object" && "error" in body ? String((body as { error?: unknown }).error ?? "") : "";
+      throw new Error(`${verb} failed (${status}) ${reason}`.trim());
     }
   } catch (error) {
-    await writePaused(auditPath, paused);
     const detail = error instanceof Error ? error.message : String(error);
-    if (/failed \(/.test(detail)) throw error;
-    process.stdout.write(`${verb} (gateway is not running; the next start keeps this)\n`);
+    const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+    const unreachable = code === "ENOENT" || detail.includes("ENOENT") || detail.includes("Approval state file is unreadable");
+    const why = unreachable
+      ? `no running gateway accepted the ${noun}`
+      : `the running gateway did not accept the ${noun} (${detail})`;
+    process.stderr.write(`drawbridge: wrote ${file}, but ${why}.\n`);
+    process.exitCode = 1;
     return;
   }
   process.stdout.write(`${verb}\n`);

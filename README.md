@@ -222,7 +222,7 @@ Drawbridge's job is to keep a confused or compromised agent from using your tool
 
 Read [docs/threat-model.md](docs/threat-model.md) before you point Drawbridge at a credential or an untrusted server.
 
-`drawbridge pause --config <file>` denies every new tool call and auto-denies calls that are already waiting. `drawbridge resume` clears it. The dashboard control does the same thing. The choice is stored in `drawbridge-pause.json` next to the audit log, so a restart stays paused.
+`drawbridge pause --config <file>` writes `drawbridge-pause.json` next to the audit log, then tells the running gateway to deny every new tool call and auto-deny calls that are already waiting. If it cannot reach that gateway, it exits nonzero and does not report success. The gateway re-reads the file before every call, so a pause written during startup still denies the next call. `drawbridge resume` clears it. The dashboard control does the same thing. A restart stays paused until resume.
 
 ## Known gaps
 

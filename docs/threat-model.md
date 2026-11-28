@@ -88,7 +88,9 @@ Mitigations:
 
 An operator needs every new call to stop, including ones already waiting, and that choice has to survive a restart.
 
-`drawbridge pause` and `drawbridge resume`, and the dashboard Pause all calls control, set `ApprovalHub.paused` and write `drawbridge-pause.json` beside the audit log (`packages/gateway/src/approvals.ts`, `packages/gateway/src/cli.ts`). A new `tools/call` is denied with `All calls paused` and `ruleId: kill:paused`. Held calls are denied with `All calls paused, so Drawbridge denied it`. Startup reads the file (`packages/gateway/src/serve.ts`).
+`drawbridge pause` and `drawbridge resume` write `drawbridge-pause.json` beside the audit log first (`packages/gateway/src/cli.ts`). They then ask the running gateway to apply that choice. If the gateway cannot be reached, the command says so and exits nonzero. It does not report success. The dashboard Pause control writes the same file and sets `ApprovalHub.paused` (`packages/gateway/src/approvals.ts`).
+
+The gateway reads the file before it accepts a call, and again before every `tools/list` and `tools/call` (`packages/gateway/src/serve.ts`, `packages/gateway/src/dispatch.ts`). A pause written during startup, or written straight to the file, denies the next call with `All calls paused` and `ruleId: kill:paused` even when the approvals socket never saw it. When pause is applied through the socket, calls that are already waiting are denied with `All calls paused, so Drawbridge denied it`. A restart stays paused until `drawbridge resume`. An unreadable pause file fail-closes: the gateway stays paused.
 
 ## Out of scope
 

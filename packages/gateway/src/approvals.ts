@@ -54,12 +54,19 @@ export function pauseStatePath(auditPath: string): string {
 }
 
 export async function readPaused(auditPath: string): Promise<boolean> {
+  const path = pauseStatePath(auditPath);
+  let text: string;
   try {
-    const text = await readFile(pauseStatePath(auditPath), "utf8");
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  try {
     const parsed = JSON.parse(text) as { paused?: unknown };
     return parsed.paused === true;
   } catch {
-    return false;
+    throw new Error(`pause file ${path} is not valid JSON`);
   }
 }
 

@@ -127,20 +127,6 @@ export async function connectGateway(configPath, env = {}) {
   };
 }
 
-async function waitForApprovalState(auditPath) {
-  const statePath = join(dirname(auditPath), "drawbridge-approvals.json");
-  const started = Date.now();
-  while (Date.now() - started < 5_000) {
-    try {
-      await readFile(statePath, "utf8");
-      return;
-    } catch {
-      await sleep(20);
-    }
-  }
-  throw new Error(`approval server did not publish ${statePath}`);
-}
-
 export async function decideOnDashboard(auditPath, id, action) {
   const state = JSON.parse(await readFile(join(dirname(auditPath), "drawbridge-approvals.json"), "utf8"));
   const response = await fetch(`${state.url}api/decide`, {
@@ -180,9 +166,6 @@ export async function withGateway(yaml, fn, options = {}) {
   );
   try {
     await client.connect(transport);
-    // connect() can resolve before the approval server publishes its state file.
-    // pause treats a missing file as "gateway is not running" and leaves the live process unpaused.
-    await waitForApprovalState(auditPath);
     return await fn({
       client,
       auditPath,

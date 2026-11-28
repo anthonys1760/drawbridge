@@ -36,7 +36,33 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
     : undefined;
   const policy = options.policy ?? new YamlPolicy(config, pins ? { pins } : {});
   const approvals = new ApprovalHub();
-  approvals.paused = await readPaused(config.audit.path);
+  try {
+    approvals.paused = await readPaused(config.audit.path);
+  } catch (error) {
+    approvals.paused = true;
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`drawbridge: ${detail}; starting paused`);
+  }
+  let pauseUnreadable = false;
+  const refreshPause = async (): Promise<void> => {
+    const was = approvals.paused;
+    try {
+      approvals.paused = await readPaused(config.audit.path);
+      pauseUnreadable = false;
+    } catch (error) {
+      approvals.paused = true;
+      if (!pauseUnreadable) {
+        pauseUnreadable = true;
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`drawbridge: ${detail}; staying paused`);
+      }
+    }
+    if (approvals.paused && !was) {
+      for (const call of approvals.list()) {
+        await approvals.decide(call.id, { action: "deny", channel: "cli", by: "pause", cause: "pause" });
+      }
+    }
+  };
   const approvalServer = await startApprovalServer({
     hub: approvals,
     auditPath: config.audit.path,
@@ -106,6 +132,7 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
         audit,
         pool: () => ready,
         approvals,
+        refreshPause,
         approval: {
           channels: config.approval.channels,
           highRisk: config.approval.highRisk,
