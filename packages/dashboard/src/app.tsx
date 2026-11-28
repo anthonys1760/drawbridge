@@ -87,9 +87,17 @@ export function App() {
   };
 
   useEffect(() => {
-    if (theme === "system") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.dataset.theme = theme;
+    const root = document.documentElement;
+    const query = window.matchMedia("(prefers-color-scheme: light)");
+    const apply = () => {
+      const resolved = theme === "system" ? (query.matches ? "light" : "dark") : theme;
+      root.dataset.theme = resolved;
+    };
+    apply();
     localStorage.setItem("db-theme", theme);
+    if (theme !== "system") return;
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
   }, [theme]);
 
   useEffect(() => {
@@ -311,13 +319,18 @@ export function App() {
           <span class="pill">Gateway running</span>
         )}
         <div class="top-actions">
-          <button class="ghost" type="button" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
-            {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System"}
-          </button>
-          <button class="ghost" type="button" onClick={openShortcuts}>Shortcuts</button>
-          <button class="ghost" type="button" onClick={() => pauseRef.current?.showModal()} disabled={offline}>
-            Pause all calls
-          </button>
+          <details class="more">
+            <summary class="ghost">Menu</summary>
+          </details>
+          <div class="more-actions">
+            <button class="ghost" type="button" onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
+              {theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System"}
+            </button>
+            <button class="ghost" type="button" onClick={openShortcuts}>Shortcuts</button>
+            <button class="ghost" type="button" onClick={() => pauseRef.current?.showModal()} disabled={offline}>
+              Pause all calls
+            </button>
+          </div>
         </div>
       </header>
       <div class={mobileDetail ? "body detail-open" : "body"}>

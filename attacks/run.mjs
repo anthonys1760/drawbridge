@@ -330,13 +330,17 @@ rules:
 `;
       return withGateway(yaml, async ({ client, auditPath, configPath }) => {
         const paused = await runCli(["pause", "--config", configPath]);
-        if (paused.code !== 0) return `pause failed: ${(paused.stderr || paused.stdout).slice(0, 160)}`;
         const echo = await client.callTool({ name: "notes__echo", arguments: { message: "hi" } });
         const events = await readEvents(auditPath);
         const denied = resultText(echo).includes("All calls paused");
         const recorded = events.some((event) => event.ruleId === "kill:paused");
-        if (denied && recorded) return EXPECTED.kill;
-        return `denied=${denied} recorded=${recorded} text=${resultText(echo).slice(0, 80)}`;
+        const confirmed = paused.code === 0 && paused.stdout === "paused\n";
+        const failClosed =
+          paused.code !== 0 &&
+          paused.stdout === "" &&
+          /no running gateway accepted the pause|did not accept the pause/.test(paused.stderr);
+        if ((confirmed || failClosed) && denied && recorded) return EXPECTED.kill;
+        return `denied=${denied} recorded=${recorded} code=${paused.code} stdout=${paused.stdout.slice(0, 60)} stderr=${paused.stderr.slice(0, 120)} text=${resultText(echo).slice(0, 80)}`;
       });
     },
   },

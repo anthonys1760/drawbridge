@@ -722,7 +722,85 @@ upstreams:
     expect(log).toContain("All calls paused, so Drawbridge denied it");
     expect(log).toContain("kill:resumed");
   }, 45_000);
+
+  it("pause before the gateway is listening writes the file, exits nonzero, and the next call is denied", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-pause-early-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    await writeFile(configPath, echoConfig(auditPath));
+    const pause = await runCli(["pause", "--config", configPath]);
+    expect(pause.status).not.toBe(0);
+    expect(pause.stdout).toBe("");
+    expect(pause.stderr).toContain(`wrote ${join(dir, "drawbridge-pause.json")}`);
+    expect(pause.stderr).toContain("no running gateway accepted the pause");
+    const pauseFile = JSON.parse(await readFile(join(dir, "drawbridge-pause.json"), "utf8")) as { paused?: boolean };
+    expect(pauseFile.paused).toBe(true);
+    const gateway = await connectGateway(configPath);
+    const denied = await gateway.client.callTool({ name: "notes__echo", arguments: { message: "hi" } });
+    expect(text(denied)).toBe("All calls paused");
+    await gateway.close();
+    const log = await readFile(auditPath, "utf8");
+    expect(log).toContain("kill:paused");
+  }, 30_000);
+
+  it("pause during startup denies the next call even when the approvals socket is not up yet", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-pause-startup-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    await writeFile(configPath, echoConfig(auditPath));
+    const starting = connectGateway(configPath);
+    const pause = await runCli(["pause", "--config", configPath]);
+    const gateway = await starting;
+    const pauseFile = JSON.parse(await readFile(join(dir, "drawbridge-pause.json"), "utf8")) as { paused?: boolean };
+    expect(pauseFile.paused).toBe(true);
+    expect(pause.stdout).not.toContain("gateway is not running");
+    if (pause.status === 0) {
+      expect(pause.stdout).toBe("paused\n");
+    } else {
+      expect(pause.stdout).toBe("");
+      expect(pause.stderr).toMatch(/no running gateway accepted the pause|did not accept the pause/);
+    }
+    const denied = await gateway.client.callTool({ name: "notes__echo", arguments: { message: "hi" } });
+    expect(text(denied)).toBe("All calls paused");
+    await gateway.close();
+  }, 30_000);
+
+  it("a pause file written out of band denies the next call without the approvals socket", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-pause-file-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    await writeFile(configPath, echoConfig(auditPath));
+    const gateway = await connectGateway(configPath);
+    const allowed = await gateway.client.callTool({ name: "notes__echo", arguments: { message: "hi" } });
+    expect(text(allowed)).not.toContain("All calls paused");
+    await writeFile(join(dir, "drawbridge-pause.json"), `${JSON.stringify({ paused: true })}\n`);
+    const denied = await gateway.client.callTool({ name: "notes__echo", arguments: { message: "hi" } });
+    expect(text(denied)).toBe("All calls paused");
+    await gateway.close();
+    const log = await readFile(auditPath, "utf8");
+    expect(log).toContain("kill:paused");
+  }, 30_000);
 });
+
+function echoConfig(auditPath: string): string {
+  return `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+rules:
+  - tool: notes__echo
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    trusted: false
+`;
+}
 
 async function waitForApprovalId(configPath: string, previous?: string): Promise<string> {
   const started = Date.now();

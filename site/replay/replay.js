@@ -52,6 +52,7 @@ const prevEl = document.querySelector("#prev");
 const nextEl = document.querySelector("#next");
 const speedEl = document.querySelector("#speed");
 const themeEl = document.querySelector("#theme");
+const themeButtons = document.querySelectorAll("[data-theme-value]");
 
 chaptersEl.replaceChildren(
   ...CHAPTERS.map((chapter, index) => {
@@ -84,20 +85,46 @@ speedEl.addEventListener("click", () => {
   speedEl.textContent = `${state.speed}×`;
   if (state.playing) setPlaying(true);
 });
-themeEl.addEventListener("click", () => {
-  const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
-  document.documentElement.setAttribute("data-theme", next);
-  themeEl.textContent = next === "light" ? "Dark" : "Light";
+function resolveTheme(choice) {
+  if (choice === "system") {
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  return choice === "light" ? "light" : "dark";
+}
+
+function applyTheme(choice) {
+  const next = choice === "light" || choice === "system" ? choice : "dark";
+  document.documentElement.setAttribute("data-theme", resolveTheme(next));
+  document.documentElement.setAttribute("data-theme-choice", next);
+  for (const button of themeButtons) {
+    button.setAttribute("aria-pressed", button.getAttribute("data-theme-value") === next ? "true" : "false");
+  }
+  themeEl?.setAttribute("aria-label", `Theme, ${next}`);
   try {
     localStorage.setItem("drawbridge-theme", next);
   } catch {
     /* the page still switches for this view */
   }
+}
+
+const initialChoice = document.documentElement.getAttribute("data-theme-choice") || "dark";
+applyTheme(initialChoice);
+for (const button of themeButtons) {
+  button.addEventListener("click", () => applyTheme(button.getAttribute("data-theme-value") || "dark"));
+}
+themeEl?.addEventListener("click", () => {
+  const order = ["system", "dark", "light"];
+  const current = document.documentElement.getAttribute("data-theme-choice") || "dark";
+  const next = order[(order.indexOf(current) + 1) % order.length];
+  applyTheme(next);
 });
-themeEl.textContent = document.documentElement.getAttribute("data-theme") === "light" ? "Dark" : "Light";
+const themeQuery = window.matchMedia("(prefers-color-scheme: light)");
+themeQuery.addEventListener("change", () => {
+  if (document.documentElement.getAttribute("data-theme-choice") === "system") applyTheme("system");
+});
 
 window.addEventListener("keydown", (event) => {
-  if (ignoresShortcuts(event.target)) return;
+  if (ignoresShortcuts(event.target, event)) return;
   if (event.key === "ArrowRight") {
     event.preventDefault();
     select(state.selected + 1, false);
@@ -120,11 +147,17 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-function ignoresShortcuts(target) {
+function ignoresShortcuts(target, event) {
   if (!(target instanceof Element)) return false;
-  if (target.closest("input, select, textarea, button")) return true;
   const editable = target.closest("[contenteditable]");
-  return Boolean(editable && editable.getAttribute("contenteditable") !== "false");
+  if (editable && editable.getAttribute("contenteditable") !== "false") return true;
+  if (target.closest("input, select, textarea")) return true;
+  if (target.closest("button")) {
+    const key = event?.key;
+    if (key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End") return false;
+    return true;
+  }
+  return false;
 }
 
 function parseLog(text) {
@@ -183,7 +216,8 @@ function jumpChapter(index) {
 
 function setPlaying(playing) {
   state.playing = playing && state.events.length > 0;
-  playEl.textContent = state.playing ? "Pause" : "Play";
+  playEl.textContent = state.playing ? "❚❚" : "▶";
+  playEl.setAttribute("aria-label", state.playing ? "Pause" : "Play");
   playEl.setAttribute("aria-pressed", state.playing ? "true" : "false");
   window.clearInterval(state.timer);
   if (!state.playing) return;
@@ -242,6 +276,19 @@ function render() {
   renderInspector();
 }
 
+function chainTip() {
+  const tip = document.createElement("span");
+  tip.className = "chain-tip";
+  const hash = state.events.at(-1)?.hash;
+  const short = typeof hash === "string" && hash ? `${hash.slice(0, 8)}…` : "";
+  if (state.verification.status === "verified") tip.textContent = short ? `Verified · ${short}` : "Verified";
+  else if (state.verification.status === "broken") tip.textContent = `Broken · entry ${state.verification.line}`;
+  else if (state.verification.status === "verifying") tip.textContent = "Checking";
+  else tip.textContent = "Unverified";
+  if (typeof hash === "string") tip.title = hash;
+  return tip;
+}
+
 function renderChain() {
   const verification = state.verification;
   const count = state.events.length;
@@ -250,12 +297,14 @@ function renderChain() {
   if (verification.status === "verifying") {
     chainEl.setAttribute("role", "status");
     chainEl.append(text(`Checking ${verification.done} of ${verification.total || count}`));
+    chainEl.append(chainTip());
     return;
   }
   if (verification.status === "verified") {
     chainEl.classList.add("verified");
     chainEl.setAttribute("role", "status");
     chainEl.append(text(`Hash chain verified. All ${verification.events} entries match their hashes and link to the entry before.`));
+    chainEl.append(chainTip());
     return;
   }
   if (verification.status === "broken") {
@@ -274,10 +323,12 @@ function renderChain() {
     jump.textContent = `Jump to entry ${k}`;
     jump.addEventListener("click", () => select(k - 1, false));
     chainEl.append(jump);
+    chainEl.append(chainTip());
     return;
   }
   chainEl.setAttribute("role", "status");
   chainEl.append(text(verification.error || "This log can't be verified"));
+  chainEl.append(chainTip());
 }
 
 function renderRows() {

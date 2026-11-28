@@ -43,6 +43,11 @@ export interface GatewayDeps {
   pool: () => Promise<UpstreamPool>;
   approvals: ApprovalHub;
   approval: ApprovalSettings;
+  /**
+   * Re-read drawbridge-pause.json and update `approvals.paused`.
+   * A throw fail-closes: the gateway stays paused.
+   */
+  refreshPause?: () => Promise<void>;
 }
 
 export interface ToolCallContext {
@@ -71,6 +76,7 @@ export async function handleToolsList(
   deps: GatewayDeps,
   input: { client: PolicyClient },
 ): Promise<{ tools: ListedTool[] }> {
+  await syncPause(deps);
   if (deps.approvals.paused) {
     throw new Error("All calls paused");
   }
@@ -178,17 +184,9 @@ export async function handleToolCall(
   const stripped = stripClientCredentials(input.args);
   const note = credentialNote(stripped.paths);
   const forward = { ...input, args: stripped.args };
+  await syncPause(deps);
   if (deps.approvals.paused) {
-    return deny(deps, {
-      client: input.client,
-      upstream: UNROUTED,
-      tool: input.name,
-      args: input.args,
-      decision: "deny",
-      ruleId: "kill:paused",
-      reason: "All calls paused",
-      ...(note ? { credentialNote: note } : {}),
-    });
+    return denyPaused(deps, input, note);
   }
   let pool: UpstreamPool;
   try {
@@ -271,6 +269,17 @@ export async function handleToolCall(
   const recorded = await appendQuiet(deps.audit, base);
   if (!recorded.ok) {
     return textError(`audit log write failed; call denied (${recorded.error})`);
+  }
+  await syncPause(deps);
+  if (deps.approvals.paused) {
+    await appendQuiet(deps.audit, {
+      ...base,
+      intentId: recorded.event.id,
+      decision: "deny",
+      ruleId: "kill:paused",
+      reason: "All calls paused",
+    });
+    return textError("All calls paused");
   }
 
   const started = Date.now();
@@ -356,6 +365,8 @@ async function holdForApproval(
   }
   const resolution = await deps.approvals.wait(view.id);
   if (resolution.action !== "approve") return textError(resolution.cause === "pause" ? "All calls paused" : BLOCKED);
+  await syncPause(deps);
+  if (deps.approvals.paused) return textError("All calls paused");
   if (!deps.approvals.claim(view.id)) return textError(BLOCKED);
   return forwardApproved(deps, pool, base, resolution.eventId ?? view.id, input);
 }
@@ -384,6 +395,8 @@ async function resumeApproval(
   }
   if (!resolution) return elicitAgain(deps, view, view.reason);
   if (resolution.action !== "approve") return textError(resolution.cause === "pause" ? "All calls paused" : BLOCKED);
+  await syncPause(deps);
+  if (deps.approvals.paused) return textError("All calls paused");
   if (!deps.approvals.claim(id)) return textError(BLOCKED);
   const base = eventBase(deps, {
     client: input.client,
@@ -475,6 +488,8 @@ async function forwardApproved(
   intentId: string,
   input: { name: string; args: Record<string, unknown>; client: PolicyClient },
 ): Promise<CallToolResult> {
+  await syncPause(deps);
+  if (deps.approvals.paused) return textError("All calls paused");
   const routed = parseNamespacedTool(input.name, new Set(pool.names()));
   if (!routed) return textError(BLOCKED);
   const started = Date.now();
@@ -534,6 +549,32 @@ function pendingView(event: AuditEvent): PendingView {
     client: event.client,
     ...(event.scanner ? { scanner: event.scanner } : {}),
   };
+}
+
+async function syncPause(deps: GatewayDeps): Promise<void> {
+  if (!deps.refreshPause) return;
+  try {
+    await deps.refreshPause();
+  } catch {
+    deps.approvals.paused = true;
+  }
+}
+
+function denyPaused(
+  deps: GatewayDeps,
+  input: { name: string; args: Record<string, unknown>; client: PolicyClient },
+  note: string | undefined,
+): Promise<CallToolResult> {
+  return deny(deps, {
+    client: input.client,
+    upstream: UNROUTED,
+    tool: input.name,
+    args: input.args,
+    decision: "deny",
+    ruleId: "kill:paused",
+    reason: "All calls paused",
+    ...(note ? { credentialNote: note } : {}),
+  });
 }
 
 async function deny(
