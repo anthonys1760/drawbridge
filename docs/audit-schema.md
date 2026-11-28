@@ -54,13 +54,13 @@ Canonical JSON (`stableStringify`) has no whitespace. Object keys are sorted by 
 
 ## Taint
 
-`taint` is the session state before the event, which is what policy sees. `taintAfter` is written only when this event changes that state (same `tainted` flag and the same `sources` in the same order means omit it). Replay uses `taintAfter` to show the flip on the event that introduced the untrusted content. The next event's `taint` is that new state. Milestone 2 does not mark a session tainted; the scanner in milestone 3 does. A log that already contains `taintAfter` still verifies, and the gateway resumes it on startup.
+`taint` is the session state before the event, which is what policy sees. `taintAfter` is written only when this event changes that state (same `tainted` flag and the same `sources` in the same order means omit it). Replay uses `taintAfter` to show the flip on the event that introduced the untrusted content. The next event's `taint` is that new state. Any untrusted `tools/call` result taints the session, even when the scan is clean, and so does any scanner hit. `tools/list` does not. `sources` are upstream names. A log that already contains `taintAfter` still verifies, and the gateway resumes it on startup.
 
 ## Intent and approval
 
 An allowed call is two lines: an intent line written before the forward, then an outcome line with `resultHash`, `durationMs`, and `intentId` set to the intent line's `id`. That pairing survives interleaved identical calls. A plain denial is one line and has no `intentId`.
 
-An `approve` decision is not forwarded. The gateway writes an `approve_pending` line with `expiresAt`, then a `deny` line whose `approval.pendingId` is the pending line's `id`. Until milestone 4 that deny is immediate and the reason says approval channels are not available. The decision line does not repeat scanner hits. Consumers read hits from the pending line via `approval.pendingId`.
+An `approve` decision is not forwarded until a person answers. The gateway writes an `approve_pending` line with `expiresAt`. A decision line (`approved`, `denied_by_human`, or `timeout`) sets `approval.pendingId` to that record's `id` and does not repeat scanner hits. If the person approves, the forwarded outcome is a later `allow` line whose `intentId` is the decision line's `id`. Unanswered calls become `timeout` when `expiresAt` passes. Approving once does not allow the next identical call.
 
 A pending call's later human decision (`approved`, `denied_by_human`, or `timeout`) also sets `approval.pendingId`. Approvals are once-only: resolving a pending id does not allow the next identical call.
 

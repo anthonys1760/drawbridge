@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig, verifyAuditJsonl } from "@drawbridge/core";
+import { approvalRequest, readApprovalState } from "./approvals.js";
 import { pinUpstreams } from "./pin.js";
 import { serveConfig } from "./serve.js";
 
@@ -13,6 +14,10 @@ Usage:
   drawbridge audit verify [--log <file>] [--config <file>]
   drawbridge pin --config <file>
   drawbridge pin update --config <file>
+  drawbridge approvals list --config <file>
+  drawbridge approvals approve <id> --config <file>
+  drawbridge approvals deny <id> --config <file>
+  drawbridge approvals url --config <file>
 
 serve
   Stdio MCP server for 2026-07-28 clients. Connects to the upstreams in the
@@ -28,6 +33,12 @@ pin
   Connect to the configured upstreams and write definition hashes to pins.path.
   \`pin update\` replaces an existing pin file. A later definition change is
   denied, or held, according to onPinMismatch.
+
+approvals
+  Talk to a running gateway's local dashboard. \`list\` prints held calls.
+  \`approve\` and \`deny\` resolve one pending id. Approving once does not
+  allow the next identical call. \`url\` prints the dashboard address with
+  its per-run token.
 `;
 
 async function main(): Promise<void> {
@@ -65,6 +76,11 @@ async function main(): Promise<void> {
       process.stdout.write(`${update ? "updated" : "pinned"} ${count} tool${count === 1 ? "" : "s"} in ${pinPath}\n`);
       return;
     }
+    if (command === "approvals") {
+      const config = await readConfig(required(values.config, "approvals requires --config <file>"));
+      await approvalsCommand(positionals[1], positionals[2], config.audit.path);
+      return;
+    }
     if (command === "audit" && positionals[1] === "verify") {
       const logPath = await resolveLogPath(values.log, positionals[2], values.config);
       const text = await readFile(logPath, "utf8").catch((error: unknown) => {
@@ -93,6 +109,38 @@ async function main(): Promise<void> {
 
   process.stderr.write(HELP);
   process.exitCode = 1;
+}
+
+async function approvalsCommand(sub: string | undefined, id: string | undefined, auditPath: string): Promise<void> {
+  if (sub === "url") {
+    const state = await readApprovalState(auditPath);
+    process.stdout.write(`${state.url}?token=${state.token}\n`);
+    return;
+  }
+  if (sub === "list") {
+    const { status, body } = await approvalRequest(auditPath, "/api/state");
+    if (status !== 200) throw new Error(`approvals list failed (${status})`);
+    const pending = (body as { pending?: { id: string; tool?: string; expiresAt?: string; reason?: string }[] }).pending ?? [];
+    if (pending.length === 0) {
+      process.stdout.write("No calls waiting\n");
+      return;
+    }
+    for (const call of pending) {
+      process.stdout.write(`${call.id}\t${call.tool ?? ""}\t${call.expiresAt ?? ""}\t${call.reason ?? ""}\n`);
+    }
+    return;
+  }
+  if ((sub === "approve" || sub === "deny") && id) {
+    const { status, body } = await approvalRequest(auditPath, "/api/decide", {
+      method: "POST",
+      body: { id, action: sub === "approve" ? "approve" : "deny", channel: "cli" },
+    });
+    if (status === 409) throw new Error("That call is no longer waiting");
+    if (status !== 200) throw new Error(`approvals ${sub} failed (${status}) ${(body as { error?: string }).error ?? ""}`);
+    process.stdout.write(`${sub === "approve" ? "approved" : "denied"} ${id}\n`);
+    return;
+  }
+  throw new Error("Use approvals list, approvals approve <id>, approvals deny <id>, or approvals url");
 }
 
 async function resolveLogPath(

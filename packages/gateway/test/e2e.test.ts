@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { JsonlAuditLog, verifyAuditJsonl } from "@drawbridge/core";
+import { approvalRequest } from "../src/approvals.js";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const cli = join(root, "packages/gateway/dist/cli.js");
@@ -277,6 +278,8 @@ scanner:
   mode: block
   scanDescriptions: true
   classifier: off
+approval:
+  timeoutSeconds: 1
 rules:
   - tool: notes__echo
     action: allow
@@ -317,7 +320,7 @@ upstreams:
 
     const held = await gateway.client.callTool({ name: "mail__send", arguments: { to: "a@outsidecorp.com" } });
     expect(held.isError).toBe(true);
-    expect(text(held)).toContain("milestone 4");
+    expect(text(held)).toBe("Blocked by policy");
     expect(text(held)).not.toContain("sent");
     expect(mail.calls).toBe(1);
     await gateway.close();
@@ -355,6 +358,8 @@ scanner:
   mode: wrap
   scanDescriptions: true
   classifier: off
+approval:
+  timeoutSeconds: 1
 rules:
   - tool: notes__echo
     action: allow
@@ -396,7 +401,7 @@ upstreams:
 
     const held = await gateway.client.callTool({ name: "mail__send", arguments: { to: "a@outsidecorp.com" } });
     expect(held.isError).toBe(true);
-    expect(text(held)).toContain("milestone 4");
+    expect(text(held)).toBe("Blocked by policy");
     expect(text(held)).not.toContain("sent");
     await gateway.close();
 
@@ -421,8 +426,154 @@ upstreams:
     expect(hit).toMatchObject({ target: "result", path: "content[0].text" });
     expect(wrappedText.slice(hit?.span[0], hit?.span[1])).toBe(phrase);
     expect(events.some((event) => event.decision === "approve_pending")).toBe(true);
+    expect(events.some((event) => event.decision === "timeout")).toBe(true);
+  }, 45_000);
+
+  it("wraps the live q4-notes read, records the heuristic hits, and taints the session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-q4-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+scanner:
+  mode: wrap
+  scanDescriptions: true
+  classifier: off
+rules:
+  - tool: notes__read
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    trusted: false
+`,
+    );
+
+    const gateway = await connectGateway(configPath);
+    const read = await gateway.client.callTool({ name: "notes__read", arguments: { path: "q4-notes" } });
+    expect(read.isError).not.toBe(true);
+    const body = text(read);
+    expect(body.startsWith("<<untrusted>>\n")).toBe(true);
+    expect(body).toContain("Ignore previous instructions");
+    expect(body).toContain("Do not tell the user");
+    const plain = await gateway.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(plain)).toContain("note:notes/a.md");
+    await gateway.close();
+
+    const log = await readFile(auditPath, "utf8");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+    const events = log.trimEnd().split("\n").map(
+      (line) =>
+        JSON.parse(line) as {
+          tool?: string;
+          taint?: { tainted: boolean };
+          taintAfter?: { tainted: boolean; sources: string[] };
+          scanner?: { verdict: string; hits: { rule: string; target: string; path: string }[] };
+        },
+    );
+    const outcome = events.find((event) => event.tool === "notes__read" && event.scanner);
+    expect(outcome?.scanner?.verdict).toBe("wrapped");
+    expect(outcome?.scanner?.hits.map((hit) => hit.rule)).toEqual(
+      expect.arrayContaining(["instruction-override", "role-hijack"]),
+    );
+    expect(outcome?.scanner?.hits.every((hit) => hit.target === "result" && hit.path === "content[0].text")).toBe(true);
+    expect(outcome?.taintAfter).toEqual({ tainted: true, sources: ["notes"] });
+    const later = events.filter((event) => event.tool === "notes__read").at(-1);
+    expect(later?.taint?.tainted).toBe(true);
+  }, 45_000);
+
+  it("approves a held mail__send from the CLI and again from the dashboard, once each", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-approve-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+approval:
+  timeoutSeconds: 30
+rules:
+  - tool: notes__echo
+    action: allow
+  - tool: mail__send
+    action: allow
+flows:
+  - name: no-send-after-untrusted-content
+    when:
+      sessionTainted: true
+    tools: [mail__send]
+    action: approve
+    reason: Untrusted content entered this session
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    trusted: false
+  mail:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}", "mail"]
+    trusted: true
+`,
+    );
+
+    const gateway = await connectGateway(configPath);
+    const first = await gateway.client.callTool({ name: "mail__send", arguments: { to: "a@outsidecorp.com" } });
+    expect(text(first)).toBe("sent");
+    const echoed = await gateway.client.callTool({ name: "notes__echo", arguments: { message: "hello" } });
+    expect(text(echoed)).toContain("hello");
+
+    const held = gateway.client.callTool({ name: "mail__send", arguments: { to: "a@outsidecorp.com" } });
+    const cliId = await waitForApprovalId(configPath);
+    const cli = await runCli(["approvals", "approve", cliId, "--config", configPath]);
+    expect(cli.status).toBe(0);
+    expect(text(await held)).toBe("sent");
+
+    const again = gateway.client.callTool({ name: "mail__send", arguments: { to: "a@outsidecorp.com" } });
+    const httpId = await waitForApprovalId(configPath, cliId);
+    expect(httpId).not.toBe(cliId);
+    const decided = await approvalRequest(auditPath, "/api/decide", {
+      method: "POST",
+      body: { id: httpId, action: "approve", channel: "dashboard" },
+    });
+    expect(decided.status).toBe(200);
+    expect(text(await again)).toBe("sent");
+    await gateway.close();
+
+    const log = await readFile(auditPath, "utf8");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+    const events = log.trimEnd().split("\n").map((line) => JSON.parse(line) as { decision?: string; approval?: { channel?: string; pendingId?: string } });
+    expect(events.filter((event) => event.decision === "approve_pending")).toHaveLength(2);
+    expect(events.some((event) => event.decision === "approved" && event.approval?.channel === "cli")).toBe(true);
+    expect(events.some((event) => event.decision === "approved" && event.approval?.channel === "dashboard")).toBe(true);
   }, 45_000);
 });
+
+async function waitForApprovalId(configPath: string, previous?: string): Promise<string> {
+  const started = Date.now();
+  while (Date.now() - started < 10_000) {
+    const listed = await runCli(["approvals", "list", "--config", configPath]);
+    const id = listed.stdout
+      .split("\n")
+      .map((line) => line.split("\t")[0] ?? "")
+      .find((value) => value.length > 0 && value !== "No calls waiting" && value !== previous);
+    if (id) return id;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("held call did not appear in approvals list");
+}
 
 async function connectGateway(configPath: string, env: Record<string, string> = {}) {
   const stderr: string[] = [];

@@ -120,7 +120,7 @@ flowchart TD
 For `tools/call` the order is:
 
 1. Split `upstream__tool`. An unknown name is denied and audited. Nothing is forwarded.
-2. `PolicyEngine.preCall`. A throw is a deny. Only `allow` and `approved` continue. `approve` writes `approve_pending` (with `expiresAt`) and then a `deny` linked by `approval.pendingId`, and does not forward. The deny reason says approval channels arrive in milestone 4.
+2. `PolicyEngine.preCall`. A throw is a deny. Only `allow` and `approved` continue. `approve` writes `approve_pending` (with `expiresAt`) and waits. A person approves or denies that one call from elicitation (when the client supports it and the tool is not high-risk), `drawbridge approvals`, or the local dashboard. A timeout writes `timeout`. The decision links with `approval.pendingId` and does not repeat scanner hits. An approval forwards once; the outcome's `intentId` is the decision id.
 3. Append an intent record and fsync it. If that write fails, the call is denied and not forwarded.
 4. Forward the raw arguments to that upstream. Drawbridge's own client identity is what the upstream sees.
 5. `PolicyEngine.postResult`. A throw withholds the payload.
@@ -159,8 +159,8 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | --- | --- |
 | 1 | Pass-through proxy, namespaced catalog, write-ahead audit log |
 | 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
-| 3 (this PR) | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
-| 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules. Approvals are once-only in v0.1 |
+| 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
+| 4 (this PR) | Approvals: elicitation, `drawbridge approvals`, and a local dashboard. Send-after-taint flags untrusted data in outbound arguments. Approvals are once-only |
 | 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
 | 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |
 | Later | Optional classifier, HTTP client with OAuth, container sandbox, multi-agent identity |
@@ -173,14 +173,15 @@ Decisions for later milestones, not built here:
 
 ## Known gaps
 
-- `approve` is recorded and then denied until milestone 4.
+- High-risk outbound tools (`*__send`, `*__http_post`, `*__create_issue`) skip in-client elicitation. They wait on the same `tools/call` for the CLI or the dashboard. A client that only supports elicitation must retry a non-high-risk approval; the dashboard does not complete that round by itself.
+- The local dashboard binds to `127.0.0.1`, uses a random per-run token, and serves no remote assets. `drawbridge approvals url` prints the address. The hosted audit replay is milestone 6.
 - A tool result from an untrusted upstream taints the session, and so does a scanner hit. The demo flow then holds `mail__send`. Trusted results with no hit do not taint. `scanner.classifier` other than `off` refuses startup; only the heuristics run.
 - In `block` mode the client does not receive the payload. Hit spans for that verdict index the withheld text. `warn` keeps the text (`flagged`). `wrap` returns the text between `<<untrusted>>` and `<<end untrusted>>`, each on its own line (`wrapped`), and spans index that wrapped text.
 - `secretRef` / `auth` still refuse startup.
 - `tools/list` is audited and is not gated by tool rules.
 - `resources/*`, `prompts/*`, and completions are not forwarded. `tools/list` is a single page; a cursor is ignored.
 - Icons and other tool fields beyond title, description, input and output schemas, and annotations are not advertised.
-- The audit store is JSONL only. The SQLite index, dashboard, and `replay` command come with the dashboard.
+- The audit store is JSONL only. The hosted replay page is milestone 6. The local dashboard is the approval UI, not a log browser.
 - Redaction is a small set of key names and patterns.
 - If the outcome record cannot be written, the client does not receive the payload. An upstream side effect may already have happened.
 - The official SDK's stdio client probes `server/discover` on a short-lived extra process. That probe starts a gateway process, which connects upstreams and then exits. Client-facing legacy `initialize` support is a later milestone.

@@ -2,6 +2,7 @@ import {
   AllowAllPolicy,
   UNTAINTED_SESSION,
   decisionForwards,
+  isOutboundTool,
   namespaceTool,
   parseNamespacedTool,
   redact,
@@ -9,6 +10,7 @@ import {
   stableStringify,
   taintAfterIfChanged,
   type AuditEvent,
+  type AuditScanner,
   type AuditSink,
   type AuditTaint,
   type NewAuditEvent,
@@ -16,18 +18,37 @@ import {
   type PolicyClient,
   type PolicyEngine,
 } from "@drawbridge/core";
-import type { CallToolResult } from "@modelcontextprotocol/server";
+import { inputRequired, inputResponse, type CallToolResult } from "@modelcontextprotocol/server";
+import { z } from "zod";
+import { ApprovalHub, type ApprovalChannel, type PendingView } from "./approvals.js";
 import type { CatalogTool, JsonObjectSchema, UpstreamPool } from "./upstreams.js";
 
-const APPROVAL_UNAVAILABLE = "Approval channels are not available until milestone 4, so the call was denied.";
+const BLOCKED = "Blocked by policy";
+const CONFIRM = z.object({ approve: z.boolean() });
 
 const UNROUTED = "_unrouted";
+
+export interface ApprovalSettings {
+  channels: ApprovalChannel[];
+  highRisk: "dashboard-only";
+  timeoutSeconds: number;
+}
 
 export interface GatewayDeps {
   sessionId: string;
   policy: PolicyEngine;
   audit: AuditSink;
   pool: () => Promise<UpstreamPool>;
+  approvals: ApprovalHub;
+  approval: ApprovalSettings;
+}
+
+export interface ToolCallContext {
+  /** Signed pending id from a previous input-required round. */
+  approvalState?: string;
+  inputResponses?: Record<string, unknown>;
+  /** True when the client declared the elicitation capability. */
+  elicitation?: boolean;
 }
 
 export interface ListedTool {
@@ -48,6 +69,9 @@ export async function handleToolsList(
   deps: GatewayDeps,
   input: { client: PolicyClient },
 ): Promise<{ tools: ListedTool[] }> {
+  if (deps.approvals.paused) {
+    throw new Error("All calls paused");
+  }
   const pool = await deps.pool();
   const tools: ListedTool[] = [];
   for (const upstream of pool.names()) {
@@ -147,7 +171,19 @@ export async function handleToolsList(
 export async function handleToolCall(
   deps: GatewayDeps,
   input: { name: string; args: Record<string, unknown>; client: PolicyClient },
+  ctx: ToolCallContext = {},
 ): Promise<CallToolResult> {
+  if (deps.approvals.paused) {
+    return deny(deps, {
+      client: input.client,
+      upstream: UNROUTED,
+      tool: input.name,
+      args: input.args,
+      decision: "deny",
+      ruleId: "kill:paused",
+      reason: "All calls paused",
+    });
+  }
   let pool: UpstreamPool;
   try {
     pool = await deps.pool();
@@ -174,6 +210,11 @@ export async function handleToolCall(
       ruleId: "router:unknown-tool",
       reason: `Unknown tool "${input.name}". Tools are named <upstream>__<tool>.`,
     });
+  }
+
+  const echoed = deps.approvals.verify(ctx.approvalState);
+  if (echoed) {
+    return resumeApproval(deps, pool, echoed, routed, input, ctx);
   }
 
   let catalog: "ready" | "unavailable" = "ready";
@@ -207,7 +248,7 @@ export async function handleToolCall(
     taint: pre.taint,
   };
   if (pre.decision === "approve") {
-    return holdForApproval(deps, eventBase(deps, { ...baseFields, decision: "approve_pending" }), pre);
+    return holdForApproval(deps, pool, eventBase(deps, { ...baseFields, decision: "approve_pending" }), pre, input, ctx);
   }
   const base = eventBase(deps, { ...baseFields, decision: pre.decision });
   if (!decisionForwards(pre.decision)) {
@@ -272,41 +313,211 @@ export function createDefaultPolicy(): PolicyEngine {
 }
 
 /**
- * Write the pending call, then deny it. Milestone 4 will wait on expiresAt
- * instead of resolving immediately. The decision line links with pendingId
- * and does not copy scanner hits from the pending line.
+ * Record approve_pending and wait. A human decision links with
+ * approval.pendingId and does not copy scanner hits. Approving once does
+ * not allow the next identical call. High-risk sends skip in-client
+ * elicitation when highRisk is dashboard-only.
  */
 async function holdForApproval(
   deps: GatewayDeps,
+  pool: UpstreamPool,
   base: NewAuditEvent,
-  pre: { ruleId?: string; reason?: string; expiresAt?: string; taint?: AuditTaint },
+  pre: { ruleId?: string; reason?: string; expiresAt?: string; taint?: AuditTaint; scanner?: AuditScanner },
+  input: { name: string; args: Record<string, unknown>; client: PolicyClient },
+  ctx: ToolCallContext,
 ): Promise<CallToolResult> {
-  const expiresAt = pre.expiresAt ?? new Date(Date.now() + 120_000).toISOString();
+  const expiresAt = pre.expiresAt ?? new Date(Date.now() + deps.approval.timeoutSeconds * 1000).toISOString();
   const pending = await appendQuiet(deps.audit, {
     ...base,
     decision: "approve_pending",
     ...(pre.ruleId !== undefined ? { ruleId: pre.ruleId } : {}),
     ...(pre.reason !== undefined ? { reason: pre.reason } : {}),
     ...(pre.taint !== undefined ? { taint: pre.taint } : {}),
+    ...(pre.scanner ? { scanner: pre.scanner } : {}),
     expiresAt,
   });
   if (!pending.ok) {
     return textError(`audit log write failed; call denied (${pending.error})`);
   }
-  const why = pre.reason ?? "Approval is required.";
-  const reason = `${why} ${APPROVAL_UNAVAILABLE}`;
-  const decision = await appendQuiet(deps.audit, {
-    ...base,
-    decision: "deny",
-    ...(pre.ruleId !== undefined ? { ruleId: pre.ruleId } : {}),
-    reason,
-    ...(pre.taint !== undefined ? { taint: pre.taint } : {}),
-    approval: { pendingId: pending.event.id },
-  });
-  if (!decision.ok) {
-    return textError(`audit log write failed; call denied (${decision.error})`);
+  const view = pendingView(pending.event);
+  const elicit = canElicit(deps, input.name, ctx);
+  deps.approvals.open(view, elicit ? "retry" : "inline", (resolution) => commitDecision(deps, base, pending.event, resolution));
+  if (elicit) {
+    return elicitAgain(deps, view, pre.reason);
   }
-  return textError(reason);
+  const resolution = await deps.approvals.wait(view.id);
+  if (resolution.action !== "approve") return textError(BLOCKED);
+  if (!deps.approvals.claim(view.id)) return textError(BLOCKED);
+  return forwardApproved(deps, pool, base, resolution.eventId ?? view.id, input);
+}
+
+async function resumeApproval(
+  deps: GatewayDeps,
+  pool: UpstreamPool,
+  id: string,
+  routed: { upstream: string; tool: string },
+  input: { name: string; args: Record<string, unknown>; client: PolicyClient },
+  ctx: ToolCallContext,
+): Promise<CallToolResult> {
+  const view = deps.approvals.peek(id);
+  if (!view || view.tool !== input.name) return textError("This approval is no longer open");
+  let resolution = deps.approvals.resolution(id);
+  if (!resolution) {
+    const choice = elicitationChoice(ctx.inputResponses);
+    if (choice === "approve" || choice === "deny") {
+      await deps.approvals.decide(id, {
+        action: choice,
+        channel: "elicitation",
+        ...(input.client.name ? { by: input.client.name } : {}),
+      });
+      resolution = deps.approvals.resolution(id);
+    }
+  }
+  if (!resolution) return elicitAgain(deps, view, view.reason);
+  if (resolution.action !== "approve") return textError(BLOCKED);
+  if (!deps.approvals.claim(id)) return textError(BLOCKED);
+  const base = eventBase(deps, {
+    client: input.client,
+    upstream: routed.upstream,
+    method: "tools/call",
+    tool: input.name,
+    args: input.args,
+    decision: "allow",
+    ...(view.ruleId !== undefined ? { ruleId: view.ruleId } : {}),
+    reason: view.reason,
+    taint: view.taint,
+  });
+  return forwardApproved(deps, pool, base, resolution.eventId ?? id, input);
+}
+
+function elicitAgain(deps: GatewayDeps, view: PendingView, reason: string | undefined): CallToolResult {
+  const message = `${view.tool} is held. ${reason ?? "Approval is required."} Approve this one call? The next send asks again.`;
+  return inputRequired({
+    requestState: deps.approvals.sign(view.id),
+    inputRequests: {
+      approval: inputRequired.elicit({
+        message,
+        requestedSchema: CONFIRM,
+      }),
+    },
+  }) as unknown as CallToolResult;
+}
+
+function canElicit(deps: GatewayDeps, tool: string, ctx: ToolCallContext): boolean {
+  if (!ctx.elicitation || !deps.approval.channels.includes("elicitation")) return false;
+  if (deps.approval.highRisk === "dashboard-only" && isOutboundTool(tool)) return false;
+  return true;
+}
+
+function elicitationChoice(responses: Record<string, unknown> | undefined): "approve" | "deny" | undefined {
+  const parsed = inputResponse(responses, "approval");
+  if (parsed.kind !== "elicit") return undefined;
+  if (parsed.action !== "accept") return "deny";
+  const content = CONFIRM.safeParse(parsed.content);
+  if (!content.success) return "deny";
+  return content.data.approve ? "approve" : "deny";
+}
+
+async function commitDecision(
+  deps: GatewayDeps,
+  base: NewAuditEvent,
+  pending: AuditEvent,
+  resolution: { action: "approve" | "deny" | "timeout"; channel?: "elicitation" | "dashboard" | "cli"; by?: string },
+): Promise<string | undefined> {
+  const decision = resolution.action === "approve" ? "approved" : resolution.action === "deny" ? "denied_by_human" : "timeout";
+  const reason =
+    decision === "approved"
+      ? "Approved once"
+      : decision === "timeout"
+        ? "Timed out, so Drawbridge denied it"
+        : resolution.channel === "cli"
+          ? "Denied from the CLI"
+          : resolution.channel === "elicitation"
+            ? "Denied in the client"
+            : "Denied by you on the dashboard";
+  const latencyMs = Math.max(0, Date.now() - Date.parse(pending.ts));
+  const written = await appendQuiet(deps.audit, {
+    ...base,
+    decision,
+    reason,
+    taint: pending.taint,
+    approval: {
+      pendingId: pending.id,
+      ...(resolution.channel ? { channel: resolution.channel } : {}),
+      ...(resolution.by ? { by: resolution.by } : {}),
+      latencyMs,
+    },
+  });
+  if (!written.ok) throw new Error(written.error);
+  return written.event.id;
+}
+
+async function forwardApproved(
+  deps: GatewayDeps,
+  pool: UpstreamPool,
+  base: NewAuditEvent,
+  intentId: string,
+  input: { name: string; args: Record<string, unknown>; client: PolicyClient },
+): Promise<CallToolResult> {
+  const routed = parseNamespacedTool(input.name, new Set(pool.names()));
+  if (!routed) return textError(BLOCKED);
+  const started = Date.now();
+  let result: CallToolResult;
+  try {
+    result = await pool.callTool(routed.upstream, routed.tool, input.args);
+  } catch (error) {
+    result = textError(`upstream "${routed.upstream}" error: ${message(error)}`);
+  }
+  let finalResult = result;
+  let scanner = undefined;
+  let taintAfter: AuditTaint | undefined;
+  try {
+    const post = await deps.policy.postResult({
+      sessionId: deps.sessionId,
+      method: "tools/call",
+      upstream: routed.upstream,
+      tool: input.name,
+      result,
+      trusted: pool.trusted(routed.upstream),
+      client: input.client,
+    });
+    finalResult = asToolResult(post.result, result);
+    if (post.taint) taintAfter = taintAfterIfChanged(base.taint, post.taint);
+    if (post.scanner) scanner = post.scanner;
+  } catch (error) {
+    finalResult = textError(`post-result hook failed; result withheld (${message(error)})`);
+  }
+  const outcome = await appendQuiet(deps.audit, {
+    ...base,
+    decision: "allow",
+    intentId,
+    ...(taintAfter ? { taintAfter } : {}),
+    ...(scanner ? { scanner } : {}),
+    resultHash: sha256(stableStringify(finalResult)),
+    durationMs: Date.now() - started,
+  });
+  if (!outcome.ok) {
+    return textError(`audit log write failed after the upstream responded; result withheld (${outcome.error})`);
+  }
+  return finalResult;
+}
+
+function pendingView(event: AuditEvent): PendingView {
+  return {
+    id: event.id,
+    tool: event.tool ?? event.method,
+    upstream: event.upstream,
+    sessionId: event.sessionId,
+    reason: event.reason ?? "Approval is required.",
+    ...(event.ruleId !== undefined ? { ruleId: event.ruleId } : {}),
+    taint: event.taint,
+    argsRedacted: event.argsRedacted,
+    argsHash: event.argsHash,
+    expiresAt: event.expiresAt ?? new Date(Date.now() + 120_000).toISOString(),
+    ts: event.ts,
+    client: event.client,
+    ...(event.scanner ? { scanner: event.scanner } : {}),
+  };
 }
 
 async function deny(

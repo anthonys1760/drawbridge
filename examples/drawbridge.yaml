@@ -1,7 +1,7 @@
 # Drawbridge example policy.
-# mail__send is allow with no allowDomains. The tainted-session flow is what
-# holds that send. The scanner wraps hits. Approval channels are still not
-# enforced (milestone 4). secretRef is still refused.
+# mail__send is allow with no allowDomains. The tainted-session flow holds
+# that send for one approval. The scanner wraps hits. notes__read of
+# q4-notes returns the sample fixture. secretRef is still refused.
 version: 1
 
 audit:
@@ -54,7 +54,7 @@ rules:
     action: allow
     args:
       path:
-        pattern: '^notes/.*\.md$'
+        pattern: '^(?:notes/.*\.md|q4-notes)$'
         maxLength: 200
   - tool: notes__echo
     action: allow

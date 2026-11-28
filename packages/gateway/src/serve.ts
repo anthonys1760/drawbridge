@@ -7,6 +7,7 @@ import {
   type DrawbridgeConfig,
   type PolicyEngine,
 } from "@drawbridge/core";
+import { ApprovalHub, startApprovalServer } from "./approvals.js";
 import { createGatewayServer } from "./server.js";
 import { SdkUpstreamPool, type UpstreamPool } from "./upstreams.js";
 
@@ -28,6 +29,14 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
     ? await loadPinFile(config.pins.path)
     : undefined;
   const policy = options.policy ?? new YamlPolicy(config, pins ? { pins } : {});
+  const approvals = new ApprovalHub();
+  const approvalServer = await startApprovalServer({
+    hub: approvals,
+    auditPath: config.audit.path,
+    sessionId,
+    channels: config.approval.channels,
+    timeoutSeconds: config.approval.timeoutSeconds,
+  });
   let pool: UpstreamPool | undefined;
   let closed = false;
   let settleReady: (pool: UpstreamPool) => void = () => undefined;
@@ -64,6 +73,7 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
 
   console.error(`drawbridge ${sessionId}`);
   console.error(`drawbridge audit log ${config.audit.path}`);
+  console.error(`drawbridge dashboard ${approvalServer.url}`);
   console.error("drawbridge listening on stdio (MCP 2026-07-28; legacy initialize is rejected)");
 
   const handle = serveStdio(
@@ -73,6 +83,12 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
         policy,
         audit,
         pool: () => ready,
+        approvals,
+        approval: {
+          channels: config.approval.channels,
+          highRisk: config.approval.highRisk,
+          timeoutSeconds: config.approval.timeoutSeconds,
+        },
       }),
     {
       legacy: "reject",
@@ -90,6 +106,7 @@ export async function serveConfig(config: DrawbridgeConfig, options: ServeOption
     await handle.close().catch(() => undefined);
     await connecting.catch(() => undefined);
     await pool?.close().catch(() => undefined);
+    await approvalServer.close().catch(() => undefined);
     await audit.close().catch(() => undefined);
     process.exit(code);
   }

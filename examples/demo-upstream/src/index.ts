@@ -1,6 +1,17 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
+
+const Q4_NOTES = readFileSync(fileURLToPath(new URL("../fixtures/q4-notes.md", import.meta.url)), "utf8");
+
+function noteText(path: string): string {
+  if (path === "q4-notes" || path === "q4-notes.md" || path.endsWith("/q4-notes") || path.endsWith("/q4-notes.md")) {
+    return Q4_NOTES;
+  }
+  return `note:${path}`;
+}
 
 function createServer(): McpServer {
   const server = new McpServer({ name: "demo-notes", version: "0.1.0" });
@@ -16,7 +27,7 @@ function createServer(): McpServer {
       }),
     },
     async ({ path }) => ({
-      content: [{ type: "text", text: `note:${path}` }],
+      content: [{ type: "text", text: noteText(path) }],
     }),
   );
 

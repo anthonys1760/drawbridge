@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { JsonlAuditLog, YamlPolicy, loadConfig, verifyAuditJsonl, type PolicyEngine } from "@drawbridge/core";
+import { ApprovalHub } from "../src/approvals.js";
 import { handleToolCall, type GatewayDeps } from "../src/dispatch.js";
 import type { CatalogTool, UpstreamPool } from "../src/upstreams.js";
 
@@ -40,32 +41,21 @@ describe("handleToolCall", () => {
     expect(events[1]?.intentId).toBe(events[0]?.id);
   });
 
-  it("records an approve as pending and then denies it without forwarding", async () => {
+  it("records an approve as pending and denies it from the hub without forwarding", async () => {
     const pool = new FakePool();
-    const approving: PolicyEngine = {
-      async preCall() {
-        return {
-          decision: "approve",
-          ruleId: "flow:no-send-after-untrusted-content",
-          reason: "Untrusted content entered this session",
-          expiresAt: "2026-12-01T00:02:00.000Z",
-          taint: { tainted: true, sources: ["notes"] },
-        };
-      },
-      async postResult(input) {
-        return { result: input.result };
-      },
-    };
-    const { deps, path, close } = await depsWith(pool, approving);
-    const result = await handleToolCall(deps, {
+    const { deps, path, close } = await depsWith(pool, approvingPolicy(() => "2099-01-01T00:00:00.000Z"));
+    const pending = handleToolCall(deps, {
       name: "notes__echo",
       args: { message: "q@outside-sample.example" },
       client: { name: "unit" },
     });
+    const id = await waitForPending(deps.approvals);
+    expect(await deps.approvals.decide(id, { action: "deny", channel: "cli", by: "cli" })).toBe(true);
+    const result = await pending;
     await close();
 
     expect(pool.calls).toHaveLength(0);
-    expect(text(result)).toContain("milestone 4");
+    expect(text(result)).toBe("Blocked by policy");
     const log = await import("node:fs/promises").then((fs) => fs.readFile(path, "utf8"));
     expect(log).toContain("q•••@outside-sample.example");
     expect(log).not.toContain("q@outside-sample.example");
@@ -80,16 +70,59 @@ describe("handleToolCall", () => {
             expiresAt?: string;
             intentId?: string;
             scanner?: unknown;
-            approval?: { pendingId?: string };
+            approval?: { pendingId?: string; channel?: string };
           },
       );
     expect(events).toHaveLength(2);
     expect(events[0]?.decision).toBe("approve_pending");
-    expect(events[0]?.expiresAt).toBe("2026-12-01T00:02:00.000Z");
-    expect(events[1]?.decision).toBe("deny");
+    expect(events[0]?.expiresAt).toBe("2099-01-01T00:00:00.000Z");
+    expect(events[1]?.decision).toBe("denied_by_human");
     expect(events[1]?.approval?.pendingId).toBe(events[0]?.id);
+    expect(events[1]?.approval?.channel).toBe("cli");
     expect(events[1]?.scanner).toBeUndefined();
     expect(events[1]?.intentId).toBeUndefined();
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+  });
+
+  it("denies a held call when expiresAt passes, and a second call is held again", async () => {
+    const pool = new FakePool();
+    let calls = 0;
+    const { deps, path, close } = await depsWith(
+      pool,
+      approvingPolicy(() => {
+        calls += 1;
+        return calls === 1 ? new Date(Date.now() + 40).toISOString() : "2099-01-01T00:00:00.000Z";
+      }),
+    );
+    const first = await handleToolCall(deps, {
+      name: "notes__echo",
+      args: { message: "again" },
+      client: { name: "unit" },
+    });
+    expect(text(first)).toBe("Blocked by policy");
+    expect(pool.calls).toHaveLength(0);
+
+    const second = handleToolCall(deps, {
+      name: "notes__echo",
+      args: { message: "again" },
+      client: { name: "unit" },
+    });
+    const id = await waitForPending(deps.approvals);
+    expect(await deps.approvals.decide(id, { action: "approve", channel: "dashboard", by: "dashboard" })).toBe(true);
+    const approved = await second;
+    expect(text(approved)).toContain("again");
+    expect(pool.calls).toHaveLength(1);
+    await close();
+
+    const log = await import("node:fs/promises").then((fs) => fs.readFile(path, "utf8"));
+    const events = log.trimEnd().split("\n").map((line) => JSON.parse(line) as { decision: string; approval?: { pendingId?: string }; intentId?: string });
+    expect(events[0]?.decision).toBe("approve_pending");
+    expect(events[1]?.decision).toBe("timeout");
+    expect(events[1]?.approval?.pendingId).toBeDefined();
+    expect(events[2]?.decision).toBe("approve_pending");
+    expect(events[2]?.id).not.toBe(events[0] && (events[0] as { id?: string }).id);
+    expect(events.some((event) => event.decision === "approved" && event.approval?.pendingId)).toBe(true);
+    expect(events.some((event) => event.decision === "allow" && event.intentId)).toBe(true);
     expect(verifyAuditJsonl(log).ok).toBe(true);
   });
 
@@ -123,6 +156,8 @@ describe("handleToolCall", () => {
         },
       },
       pool: async () => blocked,
+      approvals: new ApprovalHub(),
+      approval: { channels: ["elicitation", "dashboard", "cli"], highRisk: "dashboard-only", timeoutSeconds: 120 },
     };
     // Policy would deny anyway. Use an allow policy so the only stop is the audit write.
     failing.policy = {
@@ -185,6 +220,33 @@ describe("handleToolCall", () => {
   });
 });
 
+function approvingPolicy(expiresAt: () => string): PolicyEngine {
+  return {
+    async preCall() {
+      return {
+        decision: "approve",
+        ruleId: "flow:no-send-after-untrusted-content",
+        reason: "Untrusted content entered this session",
+        expiresAt: expiresAt(),
+        taint: { tainted: true, sources: ["notes"] },
+      };
+    },
+    async postResult(input) {
+      return { result: input.result };
+    },
+  };
+}
+
+async function waitForPending(hub: ApprovalHub): Promise<string> {
+  const started = Date.now();
+  while (Date.now() - started < 2_000) {
+    const pending = hub.list();
+    if (pending[0]) return pending[0].id;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("pending call did not open");
+}
+
 function policyFor(): PolicyEngine {
   return new YamlPolicy(
     loadConfig(`
@@ -236,6 +298,7 @@ async function depsWith(pool: UpstreamPool, policy?: PolicyEngine) {
   dirs.push(dir);
   const path = join(dir, "audit.jsonl");
   const audit = await JsonlAuditLog.open(path);
+  const approvals = new ApprovalHub();
   const deps: GatewayDeps = {
     sessionId: "session-1",
     policy: policy ?? {
@@ -248,8 +311,17 @@ async function depsWith(pool: UpstreamPool, policy?: PolicyEngine) {
     },
     audit,
     pool: async () => pool,
+    approvals,
+    approval: { channels: ["elicitation", "dashboard", "cli"], highRisk: "dashboard-only", timeoutSeconds: 120 },
   };
-  return { deps, path, close: () => audit.close() };
+  return {
+    deps,
+    path,
+    close: async () => {
+      approvals.close();
+      await audit.close();
+    },
+  };
 }
 
 function text(result: { content: { text?: string }[] }): string {
