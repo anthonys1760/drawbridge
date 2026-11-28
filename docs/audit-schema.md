@@ -54,7 +54,7 @@ Canonical JSON (`stableStringify`) has no whitespace. Object keys are sorted by 
 
 ## Taint
 
-`taint` is the session state before the event, which is what policy sees. `taintAfter` is written only when this event changes that state (same `tainted` flag and the same `sources` in the same order means omit it). Replay uses `taintAfter` to show the flip on the event that introduced the untrusted content. The next event's `taint` is that new state. Milestone 2 does not mark a session tainted; the scanner in milestone 3 does. A log that already contains `taintAfter` still verifies, and the gateway resumes it on startup.
+`taint` is the session state before the event, which is what policy sees. `taintAfter` is written only when this event changes that state (same `tainted` flag and the same `sources` in the same order means omit it). Replay uses `taintAfter` to show the flip on the event that introduced the untrusted content. The next event's `taint` is that new state. Any untrusted `tools/call` result taints the session, even when the scan is clean, and so does any scanner hit. `tools/list` does not. `sources` are upstream names. A log that already contains `taintAfter` still verifies, and the gateway resumes it on startup.
 
 ## Intent and approval
 

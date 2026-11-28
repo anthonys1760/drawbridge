@@ -429,6 +429,67 @@ upstreams:
     expect(events.some((event) => event.decision === "timeout")).toBe(true);
   }, 45_000);
 
+  it("wraps the live q4-notes read, records the heuristic hits, and taints the session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "drawbridge-q4-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const auditPath = join(dir, "audit.jsonl");
+    const configPath = join(dir, "drawbridge.yaml");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      configPath,
+      `version: 1
+audit:
+  path: ${auditPath}
+defaults:
+  action: deny
+scanner:
+  mode: wrap
+  scanDescriptions: true
+  classifier: off
+rules:
+  - tool: notes__read
+    action: allow
+upstreams:
+  notes:
+    transport: stdio
+    command: ["${process.execPath}", "${demo}"]
+    trusted: false
+`,
+    );
+
+    const gateway = await connectGateway(configPath);
+    const read = await gateway.client.callTool({ name: "notes__read", arguments: { path: "q4-notes" } });
+    expect(read.isError).not.toBe(true);
+    const body = text(read);
+    expect(body.startsWith("<<untrusted>>\n")).toBe(true);
+    expect(body).toContain("Ignore previous instructions");
+    expect(body).toContain("Do not tell the user");
+    const plain = await gateway.client.callTool({ name: "notes__read", arguments: { path: "notes/a.md" } });
+    expect(text(plain)).toContain("note:notes/a.md");
+    await gateway.close();
+
+    const log = await readFile(auditPath, "utf8");
+    expect(verifyAuditJsonl(log).ok).toBe(true);
+    const events = log.trimEnd().split("\n").map(
+      (line) =>
+        JSON.parse(line) as {
+          tool?: string;
+          taint?: { tainted: boolean };
+          taintAfter?: { tainted: boolean; sources: string[] };
+          scanner?: { verdict: string; hits: { rule: string; target: string; path: string }[] };
+        },
+    );
+    const outcome = events.find((event) => event.tool === "notes__read" && event.scanner);
+    expect(outcome?.scanner?.verdict).toBe("wrapped");
+    expect(outcome?.scanner?.hits.map((hit) => hit.rule)).toEqual(
+      expect.arrayContaining(["instruction-override", "role-hijack"]),
+    );
+    expect(outcome?.scanner?.hits.every((hit) => hit.target === "result" && hit.path === "content[0].text")).toBe(true);
+    expect(outcome?.taintAfter).toEqual({ tainted: true, sources: ["notes"] });
+    const later = events.filter((event) => event.tool === "notes__read").at(-1);
+    expect(later?.taint?.tainted).toBe(true);
+  }, 45_000);
+
   it("approves a held mail__send from the CLI and again from the dashboard, once each", async () => {
     const dir = await mkdtemp(join(tmpdir(), "drawbridge-approve-"));
     cleanups.push(() => rm(dir, { recursive: true, force: true }));
