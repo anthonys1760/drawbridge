@@ -1,6 +1,6 @@
 import { access } from "node:fs/promises";
 import { namespaceTool, savePinFile, toolDefinitionHash, type DrawbridgeConfig } from "@drawbridge/core";
-import { SdkUpstreamPool } from "./upstreams.js";
+import { openUpstreamPool } from "./upstreams.js";
 
 /**
  * Write the current upstream tool-definition hashes.
@@ -16,7 +16,7 @@ export async function pinUpstreams(config: DrawbridgeConfig, pinPath: string, up
       throw new Error(`Pin file ${pinPath} already exists. Run \`drawbridge pin update --config <file>\` to replace it.`);
     }
   }
-  const pool = await SdkUpstreamPool.connect(config.upstreams);
+  const { pool } = await openUpstreamPool(config);
   try {
     const tools: Record<string, string> = {};
     for (const entry of config.upstreams) {

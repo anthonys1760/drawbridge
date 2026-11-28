@@ -2,7 +2,15 @@ export { AuditIntegrityError, ConfigError, DrawbridgeError } from "./errors.js";
 export { sha256, stableStringify } from "./hash.js";
 export { NAMESPACE_SEPARATOR, assertUpstreamName, namespaceTool, parseNamespacedTool } from "./namespace.js";
 export { collectText, exfilScanner, isOutboundTool, OUTBOUND_TOOL_GLOBS } from "./exfil.js";
-export { maskEmail, redact } from "./redact.js";
+export { credentialNote, maskEmail, redact, stripClientCredentials } from "./redact.js";
+export {
+  assertSecretRef,
+  createScrubber,
+  credentialLiteralWarnings,
+  envForStdio,
+  headersForHttp,
+  resolveUpstreamSecrets,
+} from "./secrets.js";
 export { ulid } from "./ulid.js";
 export {
   AllowAllPolicy,

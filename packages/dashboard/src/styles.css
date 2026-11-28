@@ -162,7 +162,12 @@ dialog::backdrop { background: var(--db-overlay); }
 .tabs { display: none; gap: var(--db-space-2); margin-bottom: var(--db-space-3); }
 .live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
-.back { display: none; background: none; border: 0; color: var(--db-info); padding: 0; margin-bottom: var(--db-space-3); }
+.back {
+  display: none; background: none; border: 0; color: var(--db-info);
+  margin-bottom: var(--db-space-3); align-items: center;
+  min-height: var(--db-target-min); min-width: var(--db-target-min);
+  padding: 0 var(--db-space-3);
+}
 .embedded { display: none; }
 @media (max-width: 1199px) {
   .body { grid-template-columns: 300px 1fr; }

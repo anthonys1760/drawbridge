@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ConfigError, loadConfig, verifyAuditJsonl } from "@drawbridge/core";
-import { approvalRequest, readApprovalState } from "./approvals.js";
+import { approvalRequest, readApprovalState, writePaused } from "./approvals.js";
 import { pinUpstreams } from "./pin.js";
 import { serveConfig } from "./serve.js";
 
@@ -18,6 +18,8 @@ Usage:
   drawbridge approvals approve <id> --config <file>
   drawbridge approvals deny <id> --config <file>
   drawbridge approvals url --config <file>
+  drawbridge pause --config <file>
+  drawbridge resume --config <file>
 
 serve
   Stdio MCP server for 2026-07-28 clients. Connects to the upstreams in the
@@ -39,6 +41,12 @@ approvals
   \`approve\` and \`deny\` resolve one pending id. Approving once does not
   allow the next identical call. \`url\` prints the dashboard address with
   its per-run token.
+
+pause, resume
+  Deny every new tool call, and auto-deny calls that are already waiting.
+  The choice is written to drawbridge-pause.json beside the audit log, so a
+  restart stays paused until \`drawbridge resume\`. If the gateway is not
+  running, the command only writes that file.
 `;
 
 async function main(): Promise<void> {
@@ -76,6 +84,11 @@ async function main(): Promise<void> {
       process.stdout.write(`${update ? "updated" : "pinned"} ${count} tool${count === 1 ? "" : "s"} in ${pinPath}\n`);
       return;
     }
+    if (command === "pause" || command === "resume") {
+      const config = await readConfig(required(values.config, `${command} requires --config <file>`));
+      await pauseCommand(command === "pause", config.audit.path);
+      return;
+    }
     if (command === "approvals") {
       const config = await readConfig(required(values.config, "approvals requires --config <file>"));
       await approvalsCommand(positionals[1], positionals[2], config.audit.path);
@@ -109,6 +122,33 @@ async function main(): Promise<void> {
 
   process.stderr.write(HELP);
   process.exitCode = 1;
+}
+
+async function pauseCommand(paused: boolean, auditPath: string): Promise<void> {
+  const verb = paused ? "paused" : "resumed";
+  try {
+    await readApprovalState(auditPath);
+  } catch {
+    await writePaused(auditPath, paused);
+    process.stdout.write(`${verb} (gateway is not running; the next start keeps this)\n`);
+    return;
+  }
+  try {
+    const { status, body } = await approvalRequest(auditPath, "/api/pause", {
+      method: "POST",
+      body: { paused, channel: "cli" },
+    });
+    if (status !== 200) {
+      throw new Error(`${verb} failed (${status}) ${(body as { error?: string }).error ?? ""}`.trim());
+    }
+  } catch (error) {
+    await writePaused(auditPath, paused);
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/failed \(/.test(detail)) throw error;
+    process.stdout.write(`${verb} (gateway is not running; the next start keeps this)\n`);
+    return;
+  }
+  process.stdout.write(`${verb}\n`);
 }
 
 async function approvalsCommand(sub: string | undefined, id: string | undefined, auditPath: string): Promise<void> {

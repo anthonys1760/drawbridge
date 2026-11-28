@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe("handleToolCall", () => {
-  it("forwards raw arguments and writes a redacted intent before the call", async () => {
+  it("strips a client token before forwarding and writes a redacted intent", async () => {
     const pool = new FakePool();
     const { deps, path, close } = await depsWith(pool);
     const result = await handleToolCall(deps, {
@@ -24,11 +24,12 @@ describe("handleToolCall", () => {
     });
     await close();
 
-    expect(pool.calls).toEqual([{ upstream: "notes", tool: "echo", args: { message: "hi", token: "super-secret" } }]);
-    expect(text(result)).toContain("super-secret");
+    expect(pool.calls).toEqual([{ upstream: "notes", tool: "echo", args: { message: "hi" } }]);
+    expect(text(result)).not.toContain("super-secret");
     const log = await import("node:fs/promises").then((fs) => fs.readFile(path, "utf8"));
     expect(log).not.toContain("super-secret");
     expect(log).toContain("[REDACTED]");
+    expect(log).toContain("Stripped client credentials at token");
     expect(verifyAuditJsonl(log).ok).toBe(true);
     const events = log
       .trimEnd()

@@ -71,6 +71,12 @@ export function timeoutAnnouncements(
     .map((event) => `${event.tool ?? "call"} timed out and was denied.`);
 }
 
+/** Marks the countdown crossed since the previous sample. An exact-second check misses a skipped tick. */
+export function crossedMarks(previous: number | undefined, left: number, marks: readonly number[] = [60, 30, 10]): number[] {
+  if (previous === undefined) return [];
+  return marks.filter((mark) => previous > mark && left <= mark);
+}
+
 export function countdownLabel(seconds: number): string {
   const left = Math.max(0, Math.ceil(seconds));
   const minutes = Math.floor(left / 60);

@@ -48,3 +48,37 @@ function redactString(value: string): string {
     .replace(BEARER, "Bearer [REDACTED]")
     .replace(SK_KEY, "[REDACTED]");
 }
+
+/**
+ * Remove client-supplied credentials before an upstream sees the arguments.
+ * The audit log still stores the redacted key via `redact()`. Paths only;
+ * the values are not returned.
+ */
+export function stripClientCredentials(value: unknown): { args: Record<string, unknown>; paths: string[] } {
+  const paths: string[] = [];
+  const stripped = stripValue(value, "", paths);
+  if (stripped === null || typeof stripped !== "object" || Array.isArray(stripped)) return { args: {}, paths };
+  return { args: stripped as Record<string, unknown>, paths };
+}
+
+export function credentialNote(paths: readonly string[]): string | undefined {
+  if (paths.length === 0) return undefined;
+  return `Stripped client credentials at ${paths.join(", ")}`;
+}
+
+function stripValue(value: unknown, path: string, paths: string[]): unknown {
+  if (Array.isArray(value)) return value.map((item, index) => stripValue(item, path ? `${path}[${index}]` : `[${index}]`, paths));
+  if (value !== null && typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      const next = path ? `${path}.${key}` : key;
+      if (SECRET_KEY.test(key)) {
+        paths.push(next);
+        continue;
+      }
+      output[key] = stripValue(child, next, paths);
+    }
+    return output;
+  }
+  return value;
+}

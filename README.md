@@ -4,7 +4,7 @@ Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawb
 
 A one-page placeholder lives in [`site/`](site/) and deploys with GitHub Pages once that source is set to GitHub Actions.
 
-This repository enforces policy and a heuristic scanner. Allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins gate each call. Descriptions and results are scanned in block, warn, or wrap mode. An untrusted tool result taints the session. An approve decision is written as pending and then denied until approval channels exist.
+This repository enforces policy and a heuristic scanner. Allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins gate each call. Descriptions and results are scanned in block, warn, or wrap mode. An untrusted tool result taints the session. An approve decision waits for one person. Per-upstream secrets stay in that upstream's env or headers, and `drawbridge pause` denies new calls until you resume.
 
 ## Quickstart
 
@@ -77,14 +77,15 @@ upstreams:
   remote:
     transport: http
     url: http://127.0.0.1:3000/mcp
-    headers:
-      Authorization: ${REMOTE_MCP_TOKEN}
+    secrets:
+      Authorization: env:REMOTE_MCP_TOKEN
 ```
 
 - Upstream names match `[A-Za-z0-9][A-Za-z0-9_-]*` and must not contain `__`. Tool `read` on upstream `notes` is advertised as `notes__read`. A tool whose own name contains `__` still round-trips.
-- `${VAR}` is read from the gateway's environment. An unset variable refuses startup. The value is not the MCP client's credential.
-- Stdio upstreams receive a short safe environment (`PATH`, `HOME`, and the other SDK defaults) plus the keys in `env`. The rest of the gateway's environment is not copied across.
-- `auth` and `secretRef` still refuse startup. Per-upstream secrets are milestone 5.
+- `${VAR}` is read from the gateway's environment for paths, commands, and URLs. An unset variable refuses startup. It is not how you pass a credential, and it is not the MCP client's credential.
+- A credential is a `secrets` entry. That is the supported path. The value is `env:NAME` or `file:PATH`. An inline value refuses startup, and the error does not repeat it. Stdio secrets are injected into that process's environment. HTTP secrets are sent only as that upstream's headers. One upstream never receives another's secrets. A credential-shaped literal in `env` or `headers` (Authorization, a Bearer value, `*_TOKEN`, `*_KEY`, `*_SECRET`, or password) prints a startup warning and does not print the value.
+- Stdio upstreams receive a short safe environment (`PATH`, `HOME`, and the other SDK defaults) plus the keys in `env` and `secrets`. The rest of the gateway's environment is not copied across.
+- `auth` and `secretRef` still refuse startup. Client arguments named like a token or an authorization header are stripped before the forward and stored as `[REDACTED]`.
 - `scanner.mode` is `block`, `warn`, or `wrap` (the example uses `wrap`). `approval.timeoutSeconds` sets `expiresAt` on a pending call (default 120). Approval channels and `highRisk` are not applied yet.
 - `pinTools: true` requires `drawbridge pin --config <file>` first (default pin path `drawbridge.pins.json`). `drawbridge pin update --config <file>` rewrites it. A changed definition is denied, or held when `onPinMismatch` is `approve`.
 
@@ -160,8 +161,8 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | 1 | Pass-through proxy, namespaced catalog, write-ahead audit log |
 | 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
 | 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
-| 4 (this PR) | Approvals: elicitation, `drawbridge approvals`, and a local dashboard. Send-after-taint flags untrusted data in outbound arguments. Approvals are once-only |
-| 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
+| 4 | Approvals: elicitation, `drawbridge approvals`, and a local dashboard. Send-after-taint flags untrusted data in outbound arguments. Approvals are once-only |
+| 5 (this PR) | Per-upstream secrets, no credential passthrough, kill switch, threat model |
 | 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |
 | Later | Optional classifier, HTTP client with OAuth, container sandbox, multi-agent identity |
 
@@ -171,13 +172,21 @@ Decisions for later milestones, not built here:
 - The demo policy has no `allowDomains` on `mail__send`. The no-send-after-untrusted flow rule is what holds that send for a person.
 - The hosted static audit replay ships in v0.1 on anthonysdigital.net.
 
+## Security
+
+Drawbridge's job is to keep a confused or compromised agent from using your tools and your credentials in ways you did not allow. The threat model names the assets, the trust boundaries, and the attacks this version does and does not claim to stop: prompt injection that leads to exfiltration, tool poisoning, rug-pull description changes, confused deputy, secret leakage, and audit tampering. Mitigations point at the code that implements them.
+
+Read [docs/threat-model.md](docs/threat-model.md) before you point Drawbridge at a credential or an untrusted server.
+
+`drawbridge pause --config <file>` denies every new tool call and auto-denies calls that are already waiting. `drawbridge resume` clears it. The dashboard control does the same thing. The choice is stored in `drawbridge-pause.json` next to the audit log, so a restart stays paused.
+
 ## Known gaps
 
 - High-risk outbound tools (`*__send`, `*__http_post`, `*__create_issue`) skip in-client elicitation. They wait on the same `tools/call` for the CLI or the dashboard. A client that only supports elicitation must retry a non-high-risk approval; the dashboard does not complete that round by itself.
 - The local dashboard binds to `127.0.0.1`, uses a random per-run token, and serves no remote assets. `drawbridge approvals url` prints the address. The hosted audit replay is milestone 6.
 - A tool result from an untrusted upstream taints the session, and so does a scanner hit. The demo flow then holds `mail__send`. Trusted results with no hit do not taint. `scanner.classifier` other than `off` refuses startup; only the heuristics run.
 - In `block` mode the client does not receive the payload. Hit spans for that verdict index the withheld text. `warn` keeps the text (`flagged`). `wrap` returns the text between `<<untrusted>>` and `<<end untrusted>>`, each on its own line (`wrapped`), and spans index that wrapped text.
-- `secretRef` / `auth` still refuse startup.
+- `secretRef` / `auth` still refuse startup. Use `secrets` with `env:` or `file:` instead.
 - `tools/list` is audited and is not gated by tool rules.
 - `resources/*`, `prompts/*`, and completions are not forwarded. `tools/list` is a single page; a cursor is ignored.
 - Icons and other tool fields beyond title, description, input and output schemas, and annotations are not advertised.
