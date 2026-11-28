@@ -369,7 +369,7 @@ async function checkSamples() {
   }
   const sample = await import(pathToFileURL(samplePath).href);
   const core = await import(pathToFileURL(join(root, "packages/core/dist/index.js")).href);
-  const browser = await import(pathToFileURL(join(root, "site/replay/verify.mjs")).href);
+  const browser = await import(pathToFileURL(join(root, "site/replay/verify.js")).href);
   const problems = [];
   const coreOk = core.verifyAuditJsonl(sample.verifiedLog);
   const browserOk = await browser.verifyAuditJsonl(sample.verifiedLog);

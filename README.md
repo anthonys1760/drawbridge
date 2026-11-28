@@ -1,18 +1,28 @@
 # Drawbridge
 
-Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawbridge connects to the upstream MCP servers you list, shows one namespaced tool catalog (`notes__read`), and writes a hash-chained audit log before it forwards a call.
+Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawbridge connects to the upstream MCP servers you list, shows one namespaced tool catalog (`notes__read`), checks the call, and writes a hash-chained audit log before it forwards.
 
-A one-page placeholder lives in [`site/`](site/) and deploys with GitHub Pages once that source is set to GitHub Actions.
+A confused note can tell the agent to send the keys. Drawbridge wraps that text, taints the session, and holds the send until a person decides. The decision and the hash chain are what you can show later.
 
-This repository enforces policy and a heuristic scanner. Allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins gate each call. Descriptions and results are scanned in block, warn, or wrap mode. An untrusted tool result taints the session. An approve decision waits for one person. Per-upstream secrets stay in that upstream's env or headers, and `drawbridge pause` denies new calls until you resume.
+The threat model is [docs/threat-model.md](docs/threat-model.md). The same log, checked again in the browser, is [site/replay/](site/replay/).
 
 ## Quickstart
 
-Requires Node.js 22 and pnpm 10.
+Requires Node.js 22 and pnpm 10. Three commands:
 
 ```bash
 pnpm install
 pnpm build
+pnpm demo
+```
+
+`pnpm demo` lists the demo tools, reads `q4-notes` (the result is wrapped and the session is tainted), reads `q4-roadmap`, and holds `mail__send`. On a terminal it prints the dashboard URL and waits. Without one, it denies the call and runs `audit verify`. The two-minute shot list is [docs/demo-script.md](docs/demo-script.md).
+
+![Replay of the demo log, then the tampered copy](docs/demo.gif)
+
+To serve the gateway yourself:
+
+```bash
 node packages/gateway/dist/cli.js serve --config examples/drawbridge.yaml
 ```
 
@@ -86,7 +96,7 @@ upstreams:
 - A credential is a `secrets` entry. That is the supported path. The value is `env:NAME` or `file:PATH`. An inline value refuses startup, and the error does not repeat it. Stdio secrets are injected into that process's environment. HTTP secrets are sent only as that upstream's headers. One upstream never receives another's secrets. A credential-shaped literal in `env` or `headers` (Authorization, a Bearer value, `*_TOKEN`, `*_KEY`, `*_SECRET`, or password) prints a startup warning and does not print the value.
 - Stdio upstreams receive a short safe environment (`PATH`, `HOME`, and the other SDK defaults) plus the keys in `env` and `secrets`. The rest of the gateway's environment is not copied across.
 - `auth` and `secretRef` still refuse startup. Client arguments named like a token or an authorization header are stripped before the forward and stored as `[REDACTED]`.
-- `scanner.mode` is `block`, `warn`, or `wrap` (the example uses `wrap`). `approval.timeoutSeconds` sets `expiresAt` on a pending call (default 120). Approval channels and `highRisk` are not applied yet.
+- `scanner.mode` is `block`, `warn`, or `wrap` (the example uses `wrap`). `approval.timeoutSeconds` sets `expiresAt` on a pending call (default 120). High-risk outbound tools skip in-client elicitation and wait on the dashboard or the CLI.
 - `pinTools: true` requires `drawbridge pin --config <file>` first (default pin path `drawbridge.pins.json`). `drawbridge pin update --config <file>` rewrites it. A changed definition is denied, or held when `onPinMismatch` is `approve`.
 
 Rules are first-match-wins, in file order. For `tools/call`:
@@ -151,8 +161,26 @@ examples/drawbridge.yaml
 SDK packages, checked against npm for this milestone: `@modelcontextprotocol/server` and `@modelcontextprotocol/client` **2.4.0** (spec 2026-07-28). Tests host a Streamable HTTP fixture with `@modelcontextprotocol/node` **2.1.2**, which is the release published alongside server 2.4.0. Config validation uses Zod 4.
 
 ```bash
-pnpm check    # build, test, typecheck, lint, secret scan
+pnpm check                  # build, test, typecheck, lint, secret scan
+pnpm attacks -- --check     # replay the scored sessions; a miss fails CI
 ```
+
+## Attack results
+
+Eight scripted sessions. The full scorecard is [docs/attack-results.md](docs/attack-results.md). `pnpm attacks` rewrites it, and CI checks the committed copy.
+
+| Scenario | Expected | Actual | Result |
+| --- | --- | --- | --- |
+| Indirect prompt injection to exfiltration | fixture wrapped, then held and not sent | fixture wrapped, then held and not sent | pass |
+| Direct prompt injection to exfiltration | argument echoed wrapped, then held and not sent | argument echoed wrapped, then held and not sent | pass |
+| Tool-description poisoning | tool description wrapped | tool description wrapped | pass |
+| Rug pull after the first tools/list | first call allowed, changed description denied | first call allowed, changed description denied | pass |
+| Confused deputy (client credentials) | client credentials stripped and not forwarded | client credentials stripped and not forwarded | pass |
+| Secret leakage | secret absent from audit, stderr, and dashboard | secret absent from audit, stderr, and dashboard | pass |
+| Audit tampering | audit verify exits 1 | audit verify exits 1 | pass |
+| Kill switch | new call denied while paused | new call denied while paused | pass |
+
+Score: 8/8.
 
 ## Roadmap
 
@@ -162,15 +190,15 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
 | 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
 | 4 | Approvals: elicitation, `drawbridge approvals`, and a local dashboard. Send-after-taint flags untrusted data in outbound arguments. Approvals are once-only |
-| 5 (this PR) | Per-upstream secrets, no credential passthrough, kill switch, threat model |
-| 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |
+| 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
+| 6 | Attack suite, scored results, three-command demo, static audit replay. Draft notes: [docs/release-notes-v0.1.md](docs/release-notes-v0.1.md). Not tagged |
 | Later | Optional classifier, HTTP client with OAuth, container sandbox, multi-agent identity |
 
 Decisions for later milestones, not built here:
 
 - Approvals in v0.1 are once-only. A decision names `approval.pendingId` and does not grant a later identical call.
 - The demo policy has no `allowDomains` on `mail__send`. The no-send-after-untrusted flow rule is what holds that send for a person.
-- The hosted static audit replay ships in v0.1 on anthonysdigital.net.
+- The static audit replay is `site/replay/`. Serve the `site/` directory so the page and fonts stay on one origin. Hosting that directory on anthonysdigital.net is a later publish step. This draft is not a release tag.
 
 ## Security
 
@@ -183,17 +211,17 @@ Read [docs/threat-model.md](docs/threat-model.md) before you point Drawbridge at
 ## Known gaps
 
 - High-risk outbound tools (`*__send`, `*__http_post`, `*__create_issue`) skip in-client elicitation. They wait on the same `tools/call` for the CLI or the dashboard. A client that only supports elicitation must retry a non-high-risk approval; the dashboard does not complete that round by itself.
-- The local dashboard binds to `127.0.0.1`, uses a random per-run token, and serves no remote assets. `drawbridge approvals url` prints the address. The hosted audit replay is milestone 6.
+- The local dashboard binds to `127.0.0.1`, uses a random per-run token, and serves no remote assets. `drawbridge approvals url` prints the address. The read-only replay is `site/replay/` and does not call the network.
 - A tool result from an untrusted upstream taints the session, and so does a scanner hit. The demo flow then holds `mail__send`. Trusted results with no hit do not taint. `scanner.classifier` other than `off` refuses startup; only the heuristics run.
 - In `block` mode the client does not receive the payload. Hit spans for that verdict index the withheld text. `warn` keeps the text (`flagged`). `wrap` returns the text between `<<untrusted>>` and `<<end untrusted>>`, each on its own line (`wrapped`), and spans index that wrapped text.
 - `secretRef` / `auth` still refuse startup. Use `secrets` with `env:` or `file:` instead.
 - `tools/list` is audited and is not gated by tool rules.
 - `resources/*`, `prompts/*`, and completions are not forwarded. `tools/list` is a single page; a cursor is ignored.
 - Icons and other tool fields beyond title, description, input and output schemas, and annotations are not advertised.
-- The audit store is JSONL only. The hosted replay page is milestone 6. The local dashboard is the approval UI, not a log browser.
+- The audit store is JSONL only. The replay reads a log you already have. The local dashboard is the approval UI, not a log browser.
 - Redaction is a small set of key names and patterns.
 - If the outcome record cannot be written, the client does not receive the payload. An upstream side effect may already have happened.
 - The official SDK's stdio client probes `server/discover` on a short-lived extra process. That probe starts a gateway process, which connects upstreams and then exits. Client-facing legacy `initialize` support is a later milestone.
-- CI runs typecheck, unit and end-to-end tests, lint, and a secret scan. The attack suite and MCP Inspector runs are milestone 6. Release provenance is not wired up yet.
+- CI runs `pnpm check` and `pnpm attacks -- --check`. MCP Inspector runs and release provenance are not wired up yet. The v0.1 notes are a draft and this commit is not tagged.
 
 Copyright 2026 Anthony. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

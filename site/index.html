@@ -116,8 +116,11 @@
           </ol>
           <pre><code>pnpm install
 pnpm build
-node packages/gateway/dist/cli.js serve --config examples/drawbridge.yaml
-node packages/gateway/dist/cli.js audit verify --config examples/drawbridge.yaml</code></pre>
+pnpm demo</code></pre>
+          <p class="note">
+            <code>pnpm demo</code> reads the sample note, taints the session, and holds <code>mail__send</code>.
+            The read-only audit replay is <a href="replay/">on this site</a>. It checks the hash chain in the browser.
+          </p>
           <p class="note">
             Point a 2026-07-28 client at that command. Tools are named <code>upstream__tool</code>, for example
             <code>notes__read</code>.
@@ -126,7 +129,7 @@ node packages/gateway/dist/cli.js audit verify --config examples/drawbridge.yaml
 
         <section>
           <h2>Roadmap</h2>
-          <h3>Milestones 1 through 5 are on main.</h3>
+          <h3>Milestones 1 through 6.</h3>
           <ol class="road">
             <li class="done">
               <span class="id">M1 done</span>
@@ -163,16 +166,19 @@ node packages/gateway/dist/cli.js audit verify --config examples/drawbridge.yaml
                 <p>Per-upstream credentials, no client-token passthrough, a kill switch, and docs/threat-model.md.</p>
               </div>
             </li>
-            <li>
-              <span class="id">M6</span>
+            <li class="done">
+              <span class="id">M6 done</span>
               <div>
                 <strong>v0.1</strong>
-                <p>Attack suite and scored results. The hosted static audit replay ships on anthonysdigital.net.</p>
+                <p>
+                  Attack suite and scored results. The static audit replay is
+                  <a href="replay/">part of this site</a>.
+                </p>
               </div>
             </li>
           </ol>
           <p class="note">
-            The replay is a read-only view of an audit log. It is part of the v0.1 release, not this placeholder.
+            The replay is a read-only view of an audit log. Open it from this site. It does not call the network.
           </p>
         </section>
       </main>

@@ -1,0 +1,133 @@
+/* Drawbridge design tokens — Direction A "Keep" (recommended).
+   Dark is the default; light follows prefers-color-scheme or [data-theme="light"].
+   Every text pairing below is checked against WCAG 2.2 AA; ratios in SPEC.md §6. */
+:root {
+  /* type — self-host these (dashboard runs on 127.0.0.1, offline, no font CDN) */
+  --db-font-sans: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --db-font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --db-text-xs: 12px;  --db-lh-xs: 16px;
+  --db-text-sm: 13px;  --db-lh-sm: 20px;
+  --db-text-md: 14px;  --db-lh-md: 22px;
+  --db-text-lg: 16px;  --db-lh-lg: 24px;
+  --db-text-xl: 20px;  --db-lh-xl: 28px;
+  --db-text-2xl: 28px; --db-lh-2xl: 36px;
+  --db-weight-regular: 400; --db-weight-medium: 500; --db-weight-semibold: 600;
+  --db-tracking-tight: -0.01em; --db-tracking-label: 0.04em;
+
+  /* space (4px base) */
+  --db-space-1: 4px;  --db-space-2: 8px;  --db-space-3: 12px; --db-space-4: 16px;
+  --db-space-5: 20px; --db-space-6: 24px; --db-space-8: 32px; --db-space-10: 40px; --db-space-12: 48px;
+
+  /* radius, borders, elevation */
+  --db-radius-sm: 4px; --db-radius-md: 6px; --db-radius-lg: 10px; --db-radius-pill: 999px;
+  --db-border-width: 1px;
+  --db-focus-width: 2px; --db-focus-offset: 2px;
+
+  /* layout */
+  --db-topbar-h: 56px;
+  --db-queue-w: 340px;
+  --db-history-w: 360px;
+  --db-actionbar-h: 72px;
+  --db-target-min: 44px;   /* touch; pointer controls may be 32px with 44px hit area */
+  --db-bp-md: 768px; --db-bp-lg: 1200px;
+
+  /* motion */
+  --db-ease: cubic-bezier(0.2, 0, 0, 1);
+  --db-dur-fast: 120ms; --db-dur-base: 180ms; --db-dur-slow: 280ms;
+
+  /* ---------- color: dark (default) ---------- */
+  color-scheme: dark;
+  --db-bg: #0B0D10;
+  --db-surface: #111418;
+  --db-raised: #171B21;
+  --db-overlay: rgba(5, 6, 8, 0.72);
+  --db-border: #2A3039;          /* decorative dividers only */
+  --db-border-control: #5F6873;  /* inputs, buttons: 3.27:1 on surface */
+  --db-text: #E7E9EC;            /* 15.18:1 on surface */
+  --db-text-muted: #A1A9B3;      /* 7.78:1 */
+  --db-text-subtle: #808996;     /* 5.22:1 — metadata only, never sole carrier */
+  --db-text-on-accent: #0B0D10;  /* 12.38:1 on accent */
+
+  --db-accent: #5EE6A8;          /* allow / approved / verified — 11.75:1 */
+  --db-accent-soft: #0F2A1F;
+  --db-accent-hover: #7AEDB9;
+  --db-warn: #F2B84B;            /* pending / tainted / held — 10.32:1 */
+  --db-warn-soft: #2A2110;
+  --db-taint-mark: #3A2E12;      /* highlight behind tainted JSON values */
+  --db-danger: #F7797B;          /* deny / broken chain — 7.01:1 */
+  --db-danger-soft: #2A1416;
+  --db-info: #86B0FF;            /* links, focus — 8.50:1 */
+  --db-info-soft: #13203A;
+  --db-focus: #86B0FF;
+
+  /* JSON syntax */
+  --db-code-key: #A1A9B3;
+  --db-code-string: #C9D1D9;
+  --db-code-number: #86B0FF;
+  --db-code-punct: #808996;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --db-bg: #F7F7F5;
+  --db-surface: #FFFFFF;
+  --db-raised: #F0F0EC;
+  --db-overlay: rgba(16, 19, 24, 0.40);
+  --db-border: #D9DAD5;
+  --db-border-control: #8A8E88;  /* 3.33:1 */
+  --db-text: #101318;            /* 18.61:1 */
+  --db-text-muted: #4F5864;      /* 7.21:1 */
+  --db-text-subtle: #646D79;     /* 5.24:1 */
+  --db-text-on-accent: #FFFFFF;  /* 5.60:1 */
+  --db-accent: #08774A;
+  --db-accent-soft: #E3F4EB;
+  --db-accent-hover: #066640;
+  --db-warn: #8A5600;
+  --db-warn-soft: #FDF3DC;
+  --db-taint-mark: #FCE9B8;
+  --db-danger: #B3261E;
+  --db-danger-soft: #FBE7E5;
+  --db-info: #1F5FD1;
+  --db-info-soft: #E6EEFC;
+  --db-focus: #1F5FD1;
+  --db-code-key: #4F5864;
+  --db-code-string: #101318;
+  --db-code-number: #1F5FD1;
+  --db-code-punct: #646D79;
+}
+
+/* Follow the OS when the user has not picked a theme (data-theme="system" or unset). */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    color-scheme: light;
+    --db-bg: #F7F7F5;
+    --db-surface: #FFFFFF;
+    --db-raised: #F0F0EC;
+    --db-overlay: rgba(16, 19, 24, 0.40);
+    --db-border: #D9DAD5;
+    --db-border-control: #8A8E88;  /* 3.33:1 */
+    --db-text: #101318;            /* 18.61:1 */
+    --db-text-muted: #4F5864;      /* 7.21:1 */
+    --db-text-subtle: #646D79;     /* 5.24:1 */
+    --db-text-on-accent: #FFFFFF;  /* 5.60:1 */
+    --db-accent: #08774A;
+    --db-accent-soft: #E3F4EB;
+    --db-accent-hover: #066640;
+    --db-warn: #8A5600;
+    --db-warn-soft: #FDF3DC;
+    --db-taint-mark: #FCE9B8;
+    --db-danger: #B3261E;
+    --db-danger-soft: #FBE7E5;
+    --db-info: #1F5FD1;
+    --db-info-soft: #E6EEFC;
+    --db-focus: #1F5FD1;
+    --db-code-key: #4F5864;
+    --db-code-string: #101318;
+    --db-code-number: #1F5FD1;
+    --db-code-punct: #646D79;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --db-dur-fast: 0ms; --db-dur-base: 0ms; --db-dur-slow: 0ms; }
+}

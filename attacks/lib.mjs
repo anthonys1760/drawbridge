@@ -94,6 +94,54 @@ async function waitForExit(pid) {
  * with the audit path. `beforeServe` runs after the file is written and before
  * the client connects (used to pin tools).
  */
+export async function connectGateway(configPath, env = {}) {
+  const { Client, StdioClientTransport, getDefaultEnvironment } = await loadSdk();
+  const stderr = [];
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [cli, "serve", "--config", configPath],
+    env: { ...getDefaultEnvironment(), ...env },
+    stderr: "pipe",
+  });
+  transport.stderr?.on("data", (chunk) => {
+    stderr.push(typeof chunk === "string" ? chunk : chunk.toString());
+  });
+  const client = new Client(
+    { name: "demo-client", version: "0.1.0" },
+    { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+  );
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    const detail = stderr.join("");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${detail}`);
+  }
+  return {
+    client,
+    stderr: () => stderr.join(""),
+    close: async () => {
+      const pid = transport.pid ?? undefined;
+      await client.close().catch(() => undefined);
+      if (pid !== undefined) await waitForExit(pid);
+    },
+  };
+}
+
+export async function decideOnDashboard(auditPath, id, action) {
+  const state = JSON.parse(await readFile(join(dirname(auditPath), "drawbridge-approvals.json"), "utf8"));
+  const response = await fetch(`${state.url}api/decide`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${state.token}`,
+      "Content-Type": "application/json",
+      "X-Drawbridge-Request": "1",
+    },
+    body: JSON.stringify({ id, action }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return state;
+}
+
 export async function withGateway(yaml, fn, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), "drawbridge-attack-"));
   const auditPath = join(dir, "audit.jsonl");
