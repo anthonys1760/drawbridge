@@ -93,7 +93,7 @@ Wrap mode rewrites each hit string and no other string. The bytes are pinned:
 <<end untrusted>>
 ```
 
-The prefix is the 14 characters `<<untrusted>>` followed by one line feed (U+000A). The suffix is one line feed followed by the 17 characters `<<end untrusted>>`. Nothing else is inserted: no space between a marker and its line feed, and no second wrapper. A `wrapped` span is the original match shifted by the prefix length, 15 UTF-16 code units, and indexes that match inside the string the client receives. `resultHash` is the hash of the wrapped result. `[untrusted]` and `[/untrusted]` are not the syntax.
+The prefix is the 13 characters `<<untrusted>>` followed by one line feed (U+000A), 14 UTF-16 code units in total. The suffix is one line feed followed by the 17 characters `<<end untrusted>>` (18 code units). Nothing else is inserted: no space between a marker and its line feed, and no second wrapper. A `wrapped` span is the original match shifted by the prefix length, 14 UTF-16 code units, and indexes that match inside the string the client receives. `resultHash` is the hash of the wrapped result. `[untrusted]` and `[/untrusted]` are not the syntax.
 
 ## Redaction
 
