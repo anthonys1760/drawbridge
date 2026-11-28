@@ -1,7 +1,9 @@
 import type { AuditScanner, AuditScannerHit, ScannerHitTarget } from "./audit.js";
 
-export const WRAP_PREFIX = "[untrusted]\n";
-export const WRAP_SUFFIX = "\n[/untrusted]";
+/** Pinned wrap syntax. Prefix is `<<untrusted>>` plus one LF. See docs/audit-schema.md. */
+export const WRAP_PREFIX = "<<untrusted>>\n";
+/** Pinned wrap syntax. Suffix is one LF plus `<<end untrusted>>`. */
+export const WRAP_SUFFIX = "\n<<end untrusted>>";
 export const BLOCKED_RESULT_TEXT = "Blocked by Drawbridge. The tool result was withheld.";
 export const BLOCKED_DESCRIPTION = "Blocked by Drawbridge. The tool description was withheld.";
 

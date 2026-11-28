@@ -77,11 +77,23 @@ HIT_PATH = /^(?:[A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*|\[(?:0|[1-9][
 `hits[].span` is a half-open `[start, end)` pair of UTF-16 indexes into one string:
 
 - `target: "args"` indexes the redacted string stored at that path in `argsRedacted` (after `redact()`), not the raw arguments that `argsHash` covers. Email masking changes the length, so a span computed on the raw address does not line up.
-- `target: "result"` indexes the string at that path in the result returned to the client when the verdict is `flagged` or `wrapped`. `resultHash` is `sha256(stableStringify(that same result))`. In wrap mode the gateway wraps the hit string first (`[untrusted]` … `[/untrusted]`), returns that wrapped result, hashes it, and spans index the injection inside the wrapped text.
+- `target: "result"` indexes the string at that path in the result returned to the client when the verdict is `flagged` or `wrapped`. `resultHash` is `sha256(stableStringify(that same result))`. In wrap mode the gateway wraps the hit string first, returns that wrapped result, hashes it, and spans index the injection inside the wrapped text.
 - When the verdict is `blocked`, the client receives an error and does not receive the payload. `resultHash` covers that error. The hit span still indexes the upstream text that was withheld, because that text is not in the returned result.
 - `target: "description"` indexes the description string the gateway holds when the verdict is `flagged` or `wrapped` (the wrapped description, in wrap mode). Descriptions are not passed through `redact()`. A `blocked` description is withheld from the client, and the span indexes the original description.
 
 Decision lines do not carry `scanner`. The pending line may.
+
+### Wrap delimiters
+
+Wrap mode rewrites each hit string and no other string. The bytes are pinned:
+
+```text
+<<untrusted>>
+<original string, unchanged>
+<<end untrusted>>
+```
+
+The prefix is the 14 characters `<<untrusted>>` followed by one line feed (U+000A). The suffix is one line feed followed by the 17 characters `<<end untrusted>>`. Nothing else is inserted: no space between a marker and its line feed, and no second wrapper. A `wrapped` span is the original match shifted by the prefix length, 15 UTF-16 code units, and indexes that match inside the string the client receives. `resultHash` is the hash of the wrapped result. `[untrusted]` and `[/untrusted]` are not the syntax.
 
 ## Redaction
 

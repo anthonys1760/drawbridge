@@ -18,8 +18,10 @@ describe("loadConfig", () => {
   it("loads the checked-in example", async () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
     const config = loadConfig(await readFile(join(root, "examples/drawbridge.yaml"), "utf8"));
-    expect(config.upstreams.map((entry) => entry.name)).toEqual(["notes"]);
+    expect(config.upstreams.map((entry) => entry.name)).toEqual(["mail", "notes"]);
     expect(config.upstreams[0]?.upstream.transport).toBe("stdio");
+    expect(config.upstreams[1]?.upstream.transport).toBe("stdio");
+    expect(config.scanner.mode).toBe("wrap");
     expect(config.defaults.action).toBe("deny");
     const send = config.rules.find((rule) => rule.tool === "mail__send");
     expect(send?.action).toBe("allow");
