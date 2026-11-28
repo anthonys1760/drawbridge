@@ -89,7 +89,8 @@ export class SdkUpstreamPool implements UpstreamPool {
 
   async listTools(name: string): Promise<CatalogTool[]> {
     const connected = this.require(name);
-    const listed = await connected.client.listTools();
+    // Refresh so a pin check sees a description that changed after the first list.
+    const listed = await connected.client.listTools(undefined, { cacheMode: "refresh" });
     const tools = listed.tools.map(toCatalog);
     connected.tools = new Map(tools.map((tool) => [tool.name, tool]));
     return tools;
