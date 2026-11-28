@@ -2,6 +2,8 @@
 
 Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawbridge connects to the upstream MCP servers you list, shows one namespaced tool catalog (`notes__read`), and writes a hash-chained audit log before it forwards a call.
 
+A one-page placeholder lives in [`site/`](site/) and deploys with GitHub Pages once that source is set to GitHub Actions.
+
 This repository enforces the milestone 2 policy engine on top of the pass-through proxy: allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins. Scanning and approval channels are accepted in the config and are not enforced yet. An approve decision is written as pending and then denied until those channels exist.
 
 ## Quickstart

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Drawbridge</title>
+    <meta
+      name="description"
+      content="Drawbridge is an open-source MCP security gateway. It sits between an agent and its tools, enforces policy, and writes a hash-chained audit log."
+    />
+    <script>
+      (function () {
+        var key = "drawbridge-theme";
+        var stored = "dark";
+        try {
+          stored = localStorage.getItem(key) || "dark";
+        } catch (e) {}
+        if (stored !== "light" && stored !== "dark" && stored !== "system") stored = "system";
+        document.documentElement.setAttribute("data-theme", stored);
+      })();
+    </script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <a class="mark" href="#top">
+          <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+            <rect x="1" y="3" width="20" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <path d="M1 8h20" stroke="var(--mint)" stroke-width="1.5" />
+            <path d="M7 8v11M15 8v11" stroke="currentColor" stroke-width="1.5" />
+          </svg>
+          Drawbridge
+        </a>
+        <div class="theme" role="group" aria-label="Color theme">
+          <button type="button" data-theme-value="system">System</button>
+          <button type="button" data-theme-value="dark">Dark</button>
+          <button type="button" data-theme-value="light">Light</button>
+        </div>
+      </header>
+
+      <main id="top">
+        <h1>A gate in front of the tools.</h1>
+        <p class="lede">
+          Drawbridge is an open-source MCP security gateway. An agent connects to it over stdio. Drawbridge connects to
+          the upstream servers you list, shows one namespaced catalog, checks each call against policy, and writes a
+          hash-chained audit log before anything is forwarded.
+        </p>
+        <div class="actions">
+          <a class="primary" href="https://github.com/anthonys1760/drawbridge">Repository</a>
+          <a class="ghost" href="https://github.com/anthonys1760/drawbridge/blob/main/LICENSE">Apache-2.0</a>
+        </div>
+
+        <section>
+          <h2>Architecture</h2>
+          <h3>One process between the agent and its servers.</h3>
+          <div class="panel">
+            <svg class="diagram" viewBox="0 0 860 280" role="img" aria-labelledby="arch-title arch-desc">
+              <title id="arch-title">Drawbridge between an agent and upstream MCP servers</title>
+              <desc id="arch-desc">
+                The agent talks stdio to Drawbridge. Drawbridge runs policy, a scanner, and a hash-chained audit log,
+                then connects onward over stdio or Streamable HTTP.
+              </desc>
+              <defs>
+                <style>
+                  .box { fill: var(--bg); stroke: var(--line); }
+                  .label { fill: var(--text); font: 600 16px Geist, sans-serif; }
+                  .sub { fill: var(--muted); font: 400 13px Geist, sans-serif; }
+                  .mint { fill: var(--mint); }
+                  .amber { fill: var(--amber); }
+                  .red { fill: var(--red); }
+                  .arrow { stroke: var(--mint); fill: none; stroke-width: 1.5; }
+                </style>
+              </defs>
+              <rect class="box" x="16" y="78" width="180" height="124" rx="16" />
+              <text class="label" x="36" y="128">Agent</text>
+              <text class="sub" x="36" y="152">MCP client</text>
+              <text class="sub" x="36" y="172">stdio, 2026-07-28</text>
+
+              <path class="arrow" d="M206 140h48" />
+              <path class="arrow" d="M246 134l8 6-8 6" />
+
+              <rect class="box" x="264" y="36" width="300" height="208" rx="16" stroke="var(--mint)" />
+              <text class="label" x="284" y="72">Drawbridge</text>
+              <text class="sub" x="284" y="108">Policy, first match wins</text>
+              <text class="sub" x="284" y="136">Scanner on descriptions and results</text>
+              <text class="amber" x="284" y="170" style="font: 500 13px Geist, sans-serif">Held and tainted sessions</text>
+              <text class="red" x="284" y="198" style="font: 500 13px Geist, sans-serif">Deny, and a broken chain</text>
+              <text class="sub" x="284" y="226">Hash-chained JSONL audit log</text>
+
+              <path class="arrow" d="M574 140h48" />
+              <path class="arrow" d="M614 134l8 6-8 6" />
+
+              <rect class="box" x="632" y="48" width="212" height="72" rx="16" />
+              <text class="label" x="652" y="80">notes</text>
+              <text class="sub" x="652" y="102">stdio upstream</text>
+              <rect class="box" x="632" y="148" width="212" height="72" rx="16" />
+              <text class="label" x="652" y="180">remote</text>
+              <text class="sub" x="652" y="202">Streamable HTTP</text>
+            </svg>
+            <div class="legend">
+              <span class="chip"><i></i>Allow and the gateway</span>
+              <span class="chip held"><i></i>Held or tainted</span>
+              <span class="chip deny"><i></i>Deny or a broken chain</span>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Install</h2>
+          <h3>Node 22 and pnpm 10.</h3>
+          <ol class="steps">
+            <li><strong>Install and build</strong> from a checkout of the repository.</li>
+            <li><strong>Serve</strong> the example config. Stdout is the MCP stream. Logs go to stderr.</li>
+            <li><strong>Verify</strong> the audit log after a session. A rewritten or dropped line fails the check.</li>
+          </ol>
+          <pre><code>pnpm install
+pnpm build
+node packages/gateway/dist/cli.js serve --config examples/drawbridge.yaml
+node packages/gateway/dist/cli.js audit verify --config examples/drawbridge.yaml</code></pre>
+          <p class="note">
+            Point a 2026-07-28 client at that command. Tools are named <code>upstream__tool</code>, for example
+            <code>notes__read</code>.
+          </p>
+        </section>
+
+        <section>
+          <h2>Roadmap</h2>
+          <h3>Milestone 1 and 2 are on main.</h3>
+          <ol class="road">
+            <li class="done">
+              <span class="id">M1 done</span>
+              <div>
+                <strong>Pass-through proxy</strong>
+                <p>Namespaced catalog and a write-ahead hash-chained audit log.</p>
+              </div>
+            </li>
+            <li class="done">
+              <span class="id">M2 done</span>
+              <div>
+                <strong>Policy engine</strong>
+                <p>Allow, deny, and approve rules, argument checks, rate limits, flows, and tool pins.</p>
+              </div>
+            </li>
+            <li>
+              <span class="id">M3</span>
+              <div>
+                <strong>Scanner and taint</strong>
+                <p>Heuristics on descriptions and results, wrap / warn / block, and session taint.</p>
+              </div>
+            </li>
+            <li>
+              <span class="id">M4</span>
+              <div>
+                <strong>Approvals</strong>
+                <p>Elicitation, CLI, and dashboard. A held call waits for a person. Approvals are once-only in v0.1.</p>
+              </div>
+            </li>
+            <li>
+              <span class="id">M5</span>
+              <div>
+                <strong>Secrets and the threat model</strong>
+                <p>Per-upstream credentials, no client-token passthrough, and a kill switch.</p>
+              </div>
+            </li>
+            <li>
+              <span class="id">M6</span>
+              <div>
+                <strong>v0.1</strong>
+                <p>Attack suite and scored results. The hosted static audit replay ships on anthonysdigital.net.</p>
+              </div>
+            </li>
+          </ol>
+          <p class="note">
+            The replay is a read-only view of an audit log. It is part of the v0.1 release, not this placeholder.
+          </p>
+        </section>
+      </main>
+
+      <footer>
+        <a href="https://github.com/anthonys1760/drawbridge">anthonys1760/drawbridge</a>
+        <a href="https://github.com/anthonys1760/drawbridge/blob/main/LICENSE">Apache License 2.0</a>
+        <span>Geist and Geist Mono, SIL Open Font License</span>
+      </footer>
+    </div>
+    <script>
+      (function () {
+        var key = "drawbridge-theme";
+        var root = document.documentElement;
+        var buttons = document.querySelectorAll("[data-theme-value]");
+        function apply(value) {
+          root.setAttribute("data-theme", value);
+          try {
+            localStorage.setItem(key, value);
+          } catch (e) {}
+          buttons.forEach(function (button) {
+            button.setAttribute("aria-pressed", button.getAttribute("data-theme-value") === value ? "true" : "false");
+          });
+        }
+        buttons.forEach(function (button) {
+          button.addEventListener("click", function () {
+            apply(button.getAttribute("data-theme-value"));
+          });
+        });
+        apply(root.getAttribute("data-theme") || "system");
+      })();
+    </script>
+  </body>
+</html>
