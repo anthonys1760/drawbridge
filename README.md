@@ -4,7 +4,7 @@ Drawbridge is an MCP security gateway. An agent connects to it over stdio. Drawb
 
 A one-page placeholder lives in [`site/`](site/) and deploys with GitHub Pages once that source is set to GitHub Actions.
 
-This repository enforces the milestone 2 policy engine on top of the pass-through proxy: allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins. Scanning and approval channels are accepted in the config and are not enforced yet. An approve decision is written as pending and then denied until those channels exist.
+This repository enforces policy and a heuristic scanner. Allow, deny, and approve rules, argument checks, rate limits, flow rules, and tool pins gate each call. Descriptions and results are scanned in block, warn, or wrap mode. An untrusted tool result taints the session. An approve decision is written as pending and then denied until approval channels exist.
 
 ## Quickstart
 
@@ -158,8 +158,8 @@ pnpm check    # build, test, typecheck, lint, secret scan
 | Milestone | Build |
 | --- | --- |
 | 1 | Pass-through proxy, namespaced catalog, write-ahead audit log |
-| 2 (this PR) | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
-| 3 | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
+| 2 | Policy engine: allow / deny / approve, argument rules, rate limits, tool pinning |
+| 3 (this PR) | Heuristic scanner, wrap / warn / block, session taint. The introducing event keeps the previous `taint` and sets `taintAfter` |
 | 4 | Approvals (elicitation, CLI, dashboard) and send-after-taint rules. Approvals are once-only in v0.1 |
 | 5 | Per-upstream secrets, no credential passthrough, kill switch, threat model |
 | 6 | Attack suite, scored results, v0.1 release, including the hosted static audit replay |
@@ -173,7 +173,9 @@ Decisions for later milestones, not built here:
 
 ## Known gaps
 
-- The scanner does not run. `approve` is recorded and then denied until milestone 4. Session taint is not set from tool results until milestone 3, so the demo flow does not hold `mail__send` unless something else has tainted the session.
+- `approve` is recorded and then denied until milestone 4.
+- A tool result from an untrusted upstream taints the session, and so does a scanner hit. The demo flow then holds `mail__send`. Trusted results with no hit do not taint. `scanner.classifier` other than `off` refuses startup; only the heuristics run.
+- In `block` mode the client does not receive the payload. Hit spans for that verdict index the withheld text. `warn` keeps the text (`flagged`). `wrap` returns the text inside `[untrusted]` markers (`wrapped`), and spans index that wrapped text.
 - `secretRef` / `auth` still refuse startup.
 - `tools/list` is audited and is not gated by tool rules.
 - `resources/*`, `prompts/*`, and completions are not forwarded. `tools/list` is a single page; a cursor is ignored.

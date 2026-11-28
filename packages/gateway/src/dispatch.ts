@@ -96,10 +96,11 @@ export async function handleToolsList(
         sessionId: deps.sessionId,
         method: "tools/list",
         upstream,
-        result: listed,
+        result: { tools: listed },
         trusted: pool.trusted(upstream),
         client: input.client,
       });
+      if (isToolCatalog(post.result)) listed = post.result.tools as CatalogTool[];
       if (post.taint) taintAfter = taintAfterIfChanged(base.taint, post.taint);
       if (post.scanner) scanner = post.scanner;
     } catch (error) {
@@ -395,6 +396,11 @@ async function appendQuiet(
   } catch (error) {
     return { ok: false, error: message(error) };
   }
+}
+
+function isToolCatalog(value: unknown): value is { tools: CatalogTool[] } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  return Array.isArray((value as { tools?: unknown }).tools);
 }
 
 function asToolResult(value: unknown, fallback: CallToolResult): CallToolResult {

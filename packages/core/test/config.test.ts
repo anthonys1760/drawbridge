@@ -92,6 +92,17 @@ upstreams:
       secretRef: keychain:mail-token
 `),
     ).toThrow(/secretRef/);
+    expect(() =>
+      loadConfig(`
+version: 1
+scanner:
+  classifier: api
+upstreams:
+  notes:
+    transport: stdio
+    command: ["node", "server.js"]
+`),
+    ).toThrow(/classifier/);
   });
 
   it("rejects an empty upstream map and a missing env var", () => {

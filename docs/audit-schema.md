@@ -77,8 +77,9 @@ HIT_PATH = /^(?:[A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*|\[(?:0|[1-9][
 `hits[].span` is a half-open `[start, end)` pair of UTF-16 indexes into one string:
 
 - `target: "args"` indexes the redacted string stored at that path in `argsRedacted` (after `redact()`), not the raw arguments that `argsHash` covers. Email masking changes the length, so a span computed on the raw address does not line up.
-- `target: "result"` indexes the string at that path in the result returned to the client. `resultHash` is `sha256(stableStringify(that same result))`. In wrap mode the gateway wraps first, returns and stores that wrapped result, hashes it, and spans index the wrapped text. Milestone 3 implements wrapping; the hash already covers the value the client receives.
-- `target: "description"` indexes the description string the gateway holds. Descriptions are not passed through `redact()`.
+- `target: "result"` indexes the string at that path in the result returned to the client when the verdict is `flagged` or `wrapped`. `resultHash` is `sha256(stableStringify(that same result))`. In wrap mode the gateway wraps the hit string first (`[untrusted]` … `[/untrusted]`), returns that wrapped result, hashes it, and spans index the injection inside the wrapped text.
+- When the verdict is `blocked`, the client receives an error and does not receive the payload. `resultHash` covers that error. The hit span still indexes the upstream text that was withheld, because that text is not in the returned result.
+- `target: "description"` indexes the description string the gateway holds when the verdict is `flagged` or `wrapped` (the wrapped description, in wrap mode). Descriptions are not passed through `redact()`. A `blocked` description is withheld from the client, and the span indexes the original description.
 
 Decision lines do not carry `scanner`. The pending line may.
 

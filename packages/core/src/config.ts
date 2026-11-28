@@ -167,6 +167,11 @@ export function loadConfig(text: string, env: NodeJS.ProcessEnv = process.env): 
   }
 
   validateRulePatterns(parsed.data.rules);
+  if (parsed.data.scanner.classifier !== "off") {
+    throw new ConfigError(
+      `scanner.classifier "${parsed.data.scanner.classifier}" is not implemented. Milestone 3 runs heuristics only; set classifier: off.`,
+    );
+  }
 
   const upstreams = names.sort().map((name) => {
     const upstream = parsed.data.upstreams[name];

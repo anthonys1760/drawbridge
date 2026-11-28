@@ -12,8 +12,8 @@ export function createGatewayServer(deps: GatewayDeps): Server {
       instructions:
         "Drawbridge is an MCP gateway. Tool names are <upstream>__<tool>. " +
         "tools/list and tools/call are forwarded to the configured upstreams. " +
-        "Tool calls are gated by drawbridge.yaml. An approve rule is recorded as pending " +
-        "and denied until approval channels exist. Scanning is not enforced yet.",
+        "Tool calls are gated by drawbridge.yaml. Descriptions and results are scanned. " +
+        "An approve rule is recorded as pending and denied until approval channels exist.",
     },
   );
 
